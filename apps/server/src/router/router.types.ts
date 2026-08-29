@@ -9,6 +9,7 @@ import {
   heartbeatRequestSchema,
   inboxRequestSchema,
   intentRequestSchema,
+  listFilesRequestSchema,
   requestSchema,
   responseSchema,
 } from "./schemas/router.schemas.js";
@@ -17,6 +18,7 @@ import { eventSchema, eventTypeSchema } from "./schemas/event.schemas.js";
 export type ClaimRequest = z.infer<typeof claimRequestSchema>;
 export type IntentRequest = z.infer<typeof intentRequestSchema>;
 export type FetchRequest = z.infer<typeof fetchRequestSchema>;
+export type ListFilesRequest = z.infer<typeof listFilesRequestSchema>;
 export type CommitRequest = z.infer<typeof commitRequestSchema>;
 export type CreateTasksRequest = z.infer<typeof createTasksRequestSchema>;
 export type HeartbeatRequest = z.infer<typeof heartbeatRequestSchema>;

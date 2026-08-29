@@ -45,6 +45,7 @@ export function promptWithCoordinationTools(request: RunnerRequest): string {
     request.prompt,
     "",
     "Coordination requirements:",
+    "- Use `node .coordination/agentctl.mjs list-files` to discover available shared paths.",
     "- Use `node .coordination/agentctl.mjs intent <path>...` before editing shared files.",
     "- Use `node .coordination/agentctl.mjs fetch <path>` instead of reading shared storage directly.",
     "- Use `node .coordination/agentctl.mjs commit <path>...` to submit completed files.",

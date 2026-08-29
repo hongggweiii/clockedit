@@ -61,6 +61,9 @@ describe("Agent coordination tools", () => {
   it("adds tool instructions only to coordinated runs", () => {
     const request = coordinatedRequest();
     expect(promptWithCoordinationTools(request)).toContain(
+      "node .coordination/agentctl.mjs list-files",
+    );
+    expect(promptWithCoordinationTools(request)).toContain(
       "node .coordination/agentctl.mjs fetch <path>",
     );
     const { coordination: _coordination, ...plain } = request;

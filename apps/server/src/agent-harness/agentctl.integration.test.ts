@@ -31,7 +31,17 @@ describe("agentctl", () => {
       received.push(envelope);
       const body = envelope.body;
       let result: unknown;
-      if (body.kind === "fetch") {
+      if (body.kind === "list_files") {
+        result = {
+          ok: true,
+          kind: "files",
+          files: [
+            { path: "contracts/order-api.json", version: 2 },
+            { path: "src/App.tsx", version: 3 },
+          ],
+          next: "Fetch the files needed for the task.",
+        };
+      } else if (body.kind === "fetch") {
         result = {
           ok: true,
           kind: "file",
@@ -127,6 +137,20 @@ describe("agentctl", () => {
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
     ))).toMatchObject({ versions: { "src/App.tsx": 4 } });
+  });
+
+  it("discovers file paths before fetching their contents", async () => {
+    const listed = await run("list-files");
+    expect(JSON.parse(listed.stdout)).toEqual({
+      ok: true,
+      kind: "files",
+      files: [
+        { path: "contracts/order-api.json", version: 2 },
+        { path: "src/App.tsx", version: 3 },
+      ],
+      next: "Fetch the files needed for the task.",
+    });
+    expect(received.at(-1)?.body).toEqual({ kind: "list_files" });
   });
 
   it("rejects paths that escape the workspace before sending a message", async () => {

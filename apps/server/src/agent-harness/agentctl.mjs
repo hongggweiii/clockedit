@@ -182,6 +182,26 @@ async function fetchFile(args) {
   return response;
 }
 
+async function listFiles(args) {
+  if (args.length !== 0) exitWithError("Usage: agentctl list-files");
+  const response = await send({ kind: "list_files" });
+  if (response.kind !== "files" || !Array.isArray(response.files)) {
+    exitWithError("List files returned an invalid response", response);
+  }
+  const paths = new Set();
+  for (const file of response.files) {
+    if (!file || typeof file !== "object" || typeof file.path !== "string") {
+      exitWithError("List files returned an invalid file reference", file);
+    }
+    const filePath = normalizeProtocolPath(file.path);
+    if (paths.has(filePath) || !Number.isInteger(file.version) || file.version < 0) {
+      exitWithError("List files returned an invalid file reference", file);
+    }
+    paths.add(filePath);
+  }
+  return response;
+}
+
 async function commit(args) {
   if (args.length === 0) exitWithError("Usage: agentctl commit <path> [path ...]");
   const paths = uniquePaths(args);
@@ -242,6 +262,7 @@ function usage() {
     "Commands:",
     "  claim",
     "  intent <path> [path ...]",
+    "  list-files",
     "  fetch <path>",
     "  commit <path> [path ...]",
     "  heartbeat",
@@ -262,6 +283,9 @@ switch (command) {
     break;
   case "fetch":
     result = await fetchFile(args);
+    break;
+  case "list-files":
+    result = await listFiles(args);
     break;
   case "commit":
     result = await commit(args);

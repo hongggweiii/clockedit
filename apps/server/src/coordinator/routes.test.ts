@@ -136,25 +136,4 @@ describe("HTTP boundary: coordination routes", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("unfreeze route rejects non-frozen tasks", async () => {
-    const submit = await app.inject({
-      method: "POST",
-      url: "/api/projects",
-      payload: {
-        name: "demo",
-        tasks: [
-          { id: "t1", title: "t", description: "d", role: "frontend", dependsOn: [], intent: { reads: [], writes: [] } },
-        ],
-      },
-    });
-    expect(submit.statusCode).toBe(201);
-    await waitUntil(() =>
-      store.snapshot().tasks.every((t) => t.state === "completed" || t.state === "failed"),
-    );
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/tasks/t1/unfreeze",
-    });
-    expect(response.statusCode).toBe(400);
-  });
 });

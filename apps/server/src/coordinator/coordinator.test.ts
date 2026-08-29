@@ -119,7 +119,7 @@ describe("Coordinator integration", () => {
     expect(overlaps).toEqual([]);
   });
 
-  it("retries on OCC conflict and freezes at MAX_ATTEMPTS", async () => {
+  it("retries on OCC conflict and fails at MAX_ATTEMPTS", async () => {
     await seedAgents([makeAgent("a1", "frontend")]);
     const coordinator = new Coordinator({
       store,
@@ -156,7 +156,7 @@ describe("Coordinator integration", () => {
     );
     await waitUntil(() => {
       const t = store.snapshot().tasks[0]!;
-      return t.state === "frozen";
+      return t.state === "failed";
     }, 8000);
     const t = store.snapshot().tasks[0]!;
     expect(t.attempt).toBeGreaterThanOrEqual(5);

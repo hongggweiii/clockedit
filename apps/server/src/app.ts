@@ -24,7 +24,6 @@ const createAgentBody = z.object({
   role: z.string().trim().min(1).max(40).optional(),
 });
 const projectIdParams = z.object({ id: z.string().uuid() });
-const taskIdParams = z.object({ id: z.string().min(1) });
 const taskIntentBody = z.object({
   reads: z.array(z.string().min(1)).default([]),
   writes: z.array(z.string().min(1)).default([]),

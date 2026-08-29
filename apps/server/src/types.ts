@@ -57,10 +57,9 @@ export type TaskState =
   | "committing"
   | "completed"
   | "conflict"
-  | "frozen"
   | "failed";
 
-export type ProjectState = "active" | "completed" | "frozen";
+export type ProjectState = "active" | "completed" | "failed";
 
 export interface TaskIntent {
   reads: string[];

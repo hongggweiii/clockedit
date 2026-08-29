@@ -53,7 +53,7 @@ describe("occ", () => {
     }
   });
 
-  it("freezes after MAX_ATTEMPTS-1 retries", async () => {
+  it("exhausts retries after MAX_ATTEMPTS-1 attempts", async () => {
     const store = new InMemoryVersionStore();
     store.forceBump("p1", "r.ts");
     const task = makeTask({ readVersions: { "r.ts": "v0" }, attempt: MAX_ATTEMPTS - 1 });
@@ -62,6 +62,6 @@ describe("occ", () => {
       writtenPaths: [],
       versionStore: store,
     });
-    expect(outcome.kind).toBe("frozen");
+    expect(outcome.kind).toBe("exhausted");
   });
 });

@@ -90,14 +90,6 @@ export class Coordinator {
     return result;
   }
 
-  async unfreezeTask(taskId: string): Promise<void> {
-    const task = this.taskStore.getTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.state !== "frozen") throw new Error(`Task ${taskId} is not frozen`);
-    await this.taskStore.setTaskState(taskId, "pending", { attempt: 0, lastError: null });
-    void this.tick();
-  }
-
   async tick(): Promise<void> {
     if (this.ticking) {
       this.pendingTick = true;
@@ -182,11 +174,11 @@ export class Coordinator {
       });
       this.emit({ type: "conflict-retry", taskId, attempt: outcome.attempt, conflictedPaths: outcome.conflictedPaths });
     } else {
-      await this.taskStore.setTaskState(taskId, "frozen", {
+      await this.taskStore.setTaskState(taskId, "failed", {
         attempt: outcome.attempt,
-        lastError: `Frozen after ${MAX_ATTEMPTS} attempts. Conflicts on: ${outcome.conflictedPaths.join(", ")}`,
+        lastError: `Failed after ${MAX_ATTEMPTS} OCC retries. Conflicts on: ${outcome.conflictedPaths.join(", ")}`,
       });
-      this.emit({ type: "frozen", taskId, attempt: outcome.attempt, conflictedPaths: outcome.conflictedPaths });
+      this.emit({ type: "exhausted", taskId, attempt: outcome.attempt, conflictedPaths: outcome.conflictedPaths });
     }
     void this.tick();
   }
@@ -196,10 +188,10 @@ export class Coordinator {
     for (const projectId of projectIds) {
       const tasks = snapshot.tasks.filter((t) => t.projectId === projectId);
       if (tasks.length === 0) continue;
-      const hasFrozen = tasks.some((t) => t.state === "frozen");
-      const allTerminal = tasks.every((t) => ["completed", "frozen", "failed"].includes(t.state));
+      const hasFailed = tasks.some((t) => t.state === "failed");
+      const allTerminal = tasks.every((t) => t.state === "completed" || t.state === "failed");
       if (!allTerminal) continue;
-      const next = hasFrozen ? "frozen" : "completed";
+      const next = hasFailed ? "failed" : "completed";
       await this.taskStore.setProjectState(projectId, next);
       this.emit({ type: "project-finalized", projectId, state: next });
     }
@@ -211,6 +203,6 @@ export type CoordinatorEvent =
   | { type: "dispatched"; taskId: string; agentId: string }
   | { type: "committed"; taskId: string; newVersions: Record<string, string> }
   | { type: "conflict-retry"; taskId: string; attempt: number; conflictedPaths: string[] }
-  | { type: "frozen"; taskId: string; attempt: number; conflictedPaths: string[] }
+  | { type: "exhausted"; taskId: string; attempt: number; conflictedPaths: string[] }
   | { type: "failed"; taskId: string; error: string }
-  | { type: "project-finalized"; projectId: string; state: "completed" | "frozen" };
+  | { type: "project-finalized"; projectId: string; state: "completed" | "failed" };

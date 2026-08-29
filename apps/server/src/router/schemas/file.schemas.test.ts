@@ -6,6 +6,7 @@ describe("file coordination schemas", () => {
     expect(fileRefSchema.safeParse({ path: "src/App.tsx", version: 3 }).success).toBe(true);
     expect(fileWriteSchema.safeParse({ path: "new.ts", content: "", based_on: null }).success).toBe(true);
     expect(fileWriteSchema.safeParse({ path: "new.ts", content: "", based_on: -1 }).success).toBe(false);
+    expect(fileWriteSchema.safeParse({ path: "old.ts", content: "", based_on: 2, delete: true }).success).toBe(true);
   });
 
   it("rejects duplicate paths in a request", () => {

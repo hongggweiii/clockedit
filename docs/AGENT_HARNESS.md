@@ -45,6 +45,7 @@ Before every turn, the runner installs the client at
 ```text
 node .coordination/agentctl.mjs claim
 node .coordination/agentctl.mjs intent src/App.tsx
+node .coordination/agentctl.mjs list-files
 node .coordination/agentctl.mjs fetch contracts/order-api.json
 node .coordination/agentctl.mjs commit src/App.tsx
 node .coordination/agentctl.mjs heartbeat
@@ -53,10 +54,17 @@ node .coordination/agentctl.mjs done
 node .coordination/agentctl.mjs create-tasks tasks.json
 ```
 
-`fetch` writes the last committed file into the Agent workspace and records its
-version in `.coordination/state.json`. `commit` reads the selected workspace
-files, supplies `based_on` for each write, and includes every other fetched file
-as read evidence. A successful commit updates the recorded versions.
+`list-files` returns the available server-side paths and versions without file
+contents. `fetch` writes the selected last committed file into the Agent
+workspace and records its version in `.coordination/state.json`. `commit` reads
+the selected workspace files, supplies `based_on` for each write, and includes
+every other fetched file as read evidence. A successful commit updates the
+recorded versions.
+
+The server store starts with a small set of fake repository files for the demo.
+Future UI uploads should populate that same store. They should not be copied
+directly into an Agent workspace because doing so would bypass fetch-time read
+tracking.
 
 Protocol failures are printed as JSON and exit non-zero. This lets the Agent
 distinguish retryable `STALE` responses from `FROZEN`, ownership, permission,

@@ -48,6 +48,7 @@ Every Agent-to-server request has the same outer shape:
 | --- | --- | --- |
 | `claim` | Atomically claim one unblocked task. First claimant wins. | Yes |
 | `intent` | Announce files before editing so overlaps are caught before work. | Yes |
+| `list_files` | Discover the paths and versions currently available in the project. | No |
 | `fetch` | Fetch the last saved version of a file and record the read. | No |
 | `commit` | Submit writes plus every read/version the work depended on. | Yes |
 | `heartbeat` | Refresh Agent liveness. This is last-write-wins status data. | No |
@@ -78,6 +79,25 @@ If another active task declared an overlapping path, the server returns
 `INTENT_CONFLICT`, freezes the affected paths, and creates an escalation for a
 human. Retrying is not appropriate because an overlap represents a real
 disagreement rather than bad timing.
+
+### Discover shared files
+
+An Agent can discover available paths without receiving file content or
+recording a read:
+
+```json
+{
+  "msg_id": "fe0bb079-e232-4572-8178-5fbd38d86e6b",
+  "agent": "frontend",
+  "task_id": "frontend-cancel-button",
+  "body": {
+    "kind": "list_files"
+  }
+}
+```
+
+The successful `files` response contains only `path` and `version`. The Agent
+must still fetch each file it depends on so the server can record the read.
 
 ### Fetch a shared file
 
@@ -157,7 +177,7 @@ algorithm.
 ## Responses and error codes
 
 Successful responses use `ok: true` and one of `claimed`, `intent_accepted`,
-`file`, `committed`, `heartbeat`, `inbox`, `done`, or `tasks_created`.
+`files`, `file`, `committed`, `heartbeat`, `inbox`, `done`, or `tasks_created`.
 
 | Error code | Meaning | Expected action |
 | --- | --- | --- |

@@ -1,3 +1,5 @@
+import type { StoredEvent, StoredFile } from "./storage/file-store.types.js";
+
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
@@ -48,6 +50,10 @@ export interface Database {
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
+  files: Record<string, StoredFile>;
+  reads: Record<string, Record<string, number>>;
+  events: StoredEvent[];
+  eventSeq: number;
 }
 
 export interface CreateAgentInput {

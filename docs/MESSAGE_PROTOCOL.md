@@ -5,9 +5,11 @@ coordination server. It deliberately does not define HTTP routes, persistence,
 the task-queue algorithm, or UI behavior. Those components share this contract
 but own their own implementation.
 
-The executable source of truth is
-[`apps/server/src/coordination-schema.ts`](../apps/server/src/coordination-schema.ts).
-It exports strict Zod schemas, inferred TypeScript types, and parse helpers.
+The executable source of truth is split between
+[`router.schemas.ts`](../apps/server/src/router/schemas/router.schemas.ts),
+[`task.schemas.ts`](../apps/server/src/router/schemas/task.schemas.ts), and
+[`file.schemas.ts`](../apps/server/src/router/schemas/file.schemas.ts).
+They export strict Zod schemas and inferred TypeScript types.
 The current contract revision is `COORDINATION_SCHEMA_VERSION = 1`.
 
 ## Rules shared by every flow
@@ -51,6 +53,12 @@ Every Agent-to-server request has the same outer shape:
 | `heartbeat` | Refresh Agent liveness. This is last-write-wins status data. | No |
 | `inbox` | Read tasks and events waiting for an Agent that may have been offline. | No |
 | `done` | Report that the current task is complete. Repeats must be idempotent. | Yes |
+| `create_tasks` | Submit a validated task plan. Intended for the orchestrator. | No |
+
+Requests are sent to
+`POST /api/projects/:projectId/coordination/messages`. The URL supplies the
+project namespace while the envelope remains the transport-neutral wire
+contract. File paths are relative to that project and use forward slashes.
 
 ### Declare intent
 
@@ -149,7 +157,7 @@ algorithm.
 ## Responses and error codes
 
 Successful responses use `ok: true` and one of `claimed`, `intent_accepted`,
-`file`, `committed`, `heartbeat`, `inbox`, or `done`.
+`file`, `committed`, `heartbeat`, `inbox`, `done`, or `tasks_created`.
 
 | Error code | Meaning | Expected action |
 | --- | --- | --- |

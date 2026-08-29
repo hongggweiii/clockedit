@@ -57,6 +57,13 @@ function appendEvent(
 export class FileStore {
   constructor(private readonly store: JsonStore) {}
 
+  list(): FileRef[] {
+    return Object.values(this.store.snapshot().files)
+      .filter((file) => !file.deleted)
+      .map((file) => ({ path: file.path, version: file.version }))
+      .sort((left, right) => left.path.localeCompare(right.path));
+  }
+
   async fetch(agent: string, rawPath: string): Promise<FetchResult> {
     const path = normalizePath(rawPath);
     return this.store.mutate((database): FetchResult => {

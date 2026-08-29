@@ -25,6 +25,9 @@ async function createStore(): Promise<{ store: JsonStore; files: FileStore }> {
   const root = await temporaryRoot();
   const store = new JsonStore(path.join(root, "db.json"));
   await store.initialize();
+  await store.mutate((database) => {
+    database.files = {};
+  });
   return { store, files: new FileStore(store) };
 }
 
@@ -50,6 +53,22 @@ async function seedFile(store: JsonStore, filePath: string, content: string): Pr
 }
 
 describe("FileStore", () => {
+  it("lists current files in path order without exposing their contents", async () => {
+    const { store, files } = await createStore();
+    await seedFile(store, "repoB/z.ts", "z");
+    await seedFile(store, "repoA/a.ts", "a");
+    await seedFile(store, "repoA/deleted.ts", "deleted");
+    await files.commit("agent-1", "task-1", [
+      { path: "repoA/deleted.ts", content: "", based_on: 1, delete: true },
+    ]);
+
+    expect(files.list()).toEqual([
+      { path: "repoA/a.ts", version: 1 },
+      { path: "repoB/z.ts", version: 1 },
+    ]);
+    expect(readSet(store, "agent-1")).toEqual({});
+  });
+
   it("lets exactly one of ten concurrent commits to the same path through", async () => {
     const { store, files } = await createStore();
     await seedFile(store, "repoA/orders.ts", "v1 content");
@@ -345,7 +364,11 @@ describe("FileStore", () => {
     const store = new JsonStore(filePath);
     await store.initialize();
     const database = store.snapshot();
-    expect(database.files).toEqual({});
+    expect(Object.keys(database.files).sort()).toEqual([
+      "repoA/src/App.tsx",
+      "repoB/src/api/orders.ts",
+      "shared/order-api.contract.md",
+    ]);
     expect(database.reads).toEqual({});
     expect(database.events).toEqual([]);
     expect(database.eventSeq).toBe(0);

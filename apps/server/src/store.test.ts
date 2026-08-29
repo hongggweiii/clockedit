@@ -15,6 +15,19 @@ afterEach(async () => {
 });
 
 describe("JsonStore", () => {
+  it("seeds the fake repositories used by the coordination demo", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-store-test-"));
+    temporaryDirectories.push(root);
+    const store = new JsonStore(path.join(root, "db.json"));
+    await store.initialize();
+
+    expect(Object.keys(store.snapshot().files).sort()).toEqual([
+      "repoA/src/App.tsx",
+      "repoB/src/api/orders.ts",
+      "shared/order-api.contract.md",
+    ]);
+  });
+
   it("does not publish a mutation in memory when persistence fails", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-store-test-"));
     temporaryDirectories.push(root);

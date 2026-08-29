@@ -2,12 +2,51 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Database } from "./types.js";
 
+const demoFiles = () => ({
+  "repoA/src/App.tsx": {
+    path: "repoA/src/App.tsx",
+    version: 1,
+    content: [
+      'export function App() {',
+      '  return <main>Order dashboard</main>;',
+      '}',
+      '',
+    ].join("\n"),
+    updatedBy: "system",
+    updatedAt: "2026-08-29T00:00:00.000Z",
+  },
+  "repoB/src/api/orders.ts": {
+    path: "repoB/src/api/orders.ts",
+    version: 1,
+    content: [
+      'export function getOrder(id: string) {',
+      '  return { order_id: id, status: "processing" };',
+      '}',
+      '',
+    ].join("\n"),
+    updatedBy: "system",
+    updatedAt: "2026-08-29T00:00:00.000Z",
+  },
+  "shared/order-api.contract.md": {
+    path: "shared/order-api.contract.md",
+    version: 1,
+    content: [
+      "# Order API contract",
+      "",
+      "`GET /orders/:id` returns `order_id` and `status`.",
+      "",
+    ].join("\n"),
+    updatedBy: "system",
+    updatedAt: "2026-08-29T00:00:00.000Z",
+  },
+});
+
 const emptyDatabase = (): Database => ({
   version: 1,
   agents: [],
   messages: [],
   runs: [],
-  files: {},
+  files: demoFiles(),
   reads: {},
   events: [],
   eventSeq: 0,
@@ -16,7 +55,7 @@ const emptyDatabase = (): Database => ({
 const withDefaults = (parsed: Database): Database => ({
   ...emptyDatabase(),
   ...parsed,
-  files: parsed.files ?? {},
+  files: { ...demoFiles(), ...(parsed.files ?? {}) },
   reads: parsed.reads ?? {},
   events: parsed.events ?? [],
   eventSeq: parsed.eventSeq ?? 0,

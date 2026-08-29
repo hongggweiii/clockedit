@@ -9,6 +9,11 @@ import type {
   RunnerRequest,
   RunnerResult,
 } from "./types.js";
+import {
+  coordinationContainerEnvArgs,
+  coordinationEnvironment,
+  installAgentTools,
+} from "./agent-harness/agent-tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,6 +81,7 @@ export function buildContainerRunArgs(
     "HOME=/tmp",
     "--env",
     "NO_COLOR=1",
+    ...coordinationContainerEnvArgs(request),
     "--mount",
     "type=bind,src=" + request.workspacePath + ",dst=/workspace",
     "--mount",
@@ -142,12 +148,13 @@ export class ContainerCodexRunner implements AgentRunner {
       throw new Error("Agent already has an active Runtime container");
     }
 
+    await installAgentTools(request.workspacePath);
     const child = spawn(
       this.config.containerEngine,
       buildContainerRunArgs(request, this.config),
       {
         cwd: request.workspacePath,
-        env: this.childEnvironment(),
+        env: this.childEnvironment(request),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -235,7 +242,7 @@ export class ContainerCodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(request?: RunnerRequest): NodeJS.ProcessEnv {
     const environment: NodeJS.ProcessEnv = {
       ARK_API_KEY: this.config.arkApiKey,
       NO_COLOR: "1",
@@ -250,6 +257,7 @@ export class ContainerCodexRunner implements AgentRunner {
     ] as const) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
     }
+    if (request) Object.assign(environment, coordinationEnvironment(request));
     return environment;
   }
 }

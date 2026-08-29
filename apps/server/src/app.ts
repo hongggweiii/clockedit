@@ -7,9 +7,15 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
+import type { CoordinationMessageHandler } from "./router/coordination-handler.js";
+import {
+  envelopeSchema,
+  responseSchema,
+} from "./router/schemas/router.schemas.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
+const projectIdParams = z.object({ projectId: z.string().trim().min(1).max(256) });
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
@@ -26,6 +32,7 @@ const messageBody = z.object({
 export async function createApp(
   config: AppConfig,
   service: AgentService,
+  coordinationHandler?: CoordinationMessageHandler,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -126,6 +133,16 @@ export async function createApp(
   app.get("/api/runs/:id", async (request) => {
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
+  });
+
+  app.post("/api/projects/:projectId/coordination/messages", async (request, reply) => {
+    if (!coordinationHandler) {
+      return reply.code(503).send({ error: "Coordination server is not configured" });
+    }
+    const { projectId } = projectIdParams.parse(request.params);
+    const envelope = envelopeSchema.parse(request.body);
+    const response = await coordinationHandler.handleMessage(projectId, envelope);
+    return responseSchema.parse(response);
   });
 
   if (config.nodeEnv === "production") {

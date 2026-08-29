@@ -9,6 +9,11 @@ import type {
   RunnerRequest,
   RunnerResult,
 } from "./types.js";
+import {
+  coordinationEnvironment,
+  installAgentTools,
+  promptWithCoordinationTools,
+} from "./agent-harness/agent-tools.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,6 +29,7 @@ export function buildCodexArgs(
   sandboxMode: AppConfig["codexSandboxMode"],
   workspacePath = request.workspacePath,
 ): string[] {
+  const prompt = promptWithCoordinationTools(request);
   const args = [
     "exec",
     "--json",
@@ -34,9 +40,9 @@ export function buildCodexArgs(
     workspacePath,
   ];
   if (request.threadId) {
-    args.push("resume", request.threadId, request.prompt);
+    args.push("resume", request.threadId, prompt);
   } else {
-    args.push(request.prompt);
+    args.push(prompt);
   }
   return args;
 }
@@ -129,10 +135,11 @@ export class CodexRunner implements AgentRunner {
       throw new Error("Agent already has an active Codex process");
     }
 
+    await installAgentTools(request.workspacePath);
     const args = buildCodexArgs(request, this.config.codexSandboxMode);
     const child = spawn(this.config.codexBin, args, {
       cwd: request.workspacePath,
-      env: this.childEnvironment(),
+      env: this.childEnvironment(request),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const settled = new Promise<void>((resolve) => {
@@ -239,7 +246,7 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(request?: RunnerRequest): NodeJS.ProcessEnv {
     const inheritedNames = [
       "PATH",
       "HOME",
@@ -262,6 +269,7 @@ export class CodexRunner implements AgentRunner {
     for (const name of inheritedNames) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
     }
+    if (request) Object.assign(environment, coordinationEnvironment(request));
     return environment;
   }
 }

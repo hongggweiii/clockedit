@@ -19,7 +19,7 @@ export class WorkspaceManager {
     await this.writeInstructions(agent);
     await writeFile(
       path.join(agent.workspacePath, ".gitignore"),
-      [".codex/", "node_modules/", "dist/", ".env", "*.log", ""].join("\n"),
+      [".codex/", ".coordination/", "node_modules/", "dist/", ".env", "*.log", ""].join("\n"),
       "utf8",
     );
     await writeFile(
@@ -53,6 +53,7 @@ export class WorkspaceManager {
       "- Preserve existing user files and avoid destructive operations.",
       "- Build and test changes when practical.",
       "- Never print environment variables or credentials.",
+      "- When coordination is enabled, use `node .coordination/agentctl.mjs help` to list the shared-file tools.",
       "",
       "This file is regenerated when the Agent configuration is updated.",
       "",

@@ -37,6 +37,25 @@ describe("Codex runner protocol", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "add tests"]);
   });
 
+  it("adds the coordination tool contract to coordinated runs", () => {
+    const args = buildCodexArgs(
+      {
+        agentId: "frontend",
+        workspacePath: "/tmp/workspace",
+        prompt: "build the page",
+        threadId: null,
+        coordination: {
+          baseUrl: "http://localhost:3000",
+          projectId: "project-1",
+          taskId: "task-1",
+        },
+      },
+      "workspace-write",
+    );
+    expect(args.at(-1)).toContain("node .coordination/agentctl.mjs fetch <path>");
+    expect(args.at(-1)).toContain("build the page");
+  });
+
   it("extracts the session, final message and usage", () => {
     const parsed = {
       messages: [] as string[],

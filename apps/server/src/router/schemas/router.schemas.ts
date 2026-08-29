@@ -22,6 +22,10 @@ export const fetchRequestSchema = z.strictObject({
   path: pathSchema,
 });
 
+export const listFilesRequestSchema = z.strictObject({
+  kind: z.literal("list_files"),
+});
+
 export const commitRequestSchema = z.strictObject({
   kind: z.literal("commit"),
   writes: uniquePaths(fileWriteSchema, (write) => write.path).min(1),
@@ -39,6 +43,7 @@ export const createTasksRequestSchema = z.strictObject({ kind: z.literal("create
 export const requestSchema = z.discriminatedUnion("kind", [
   claimRequestSchema,
   intentRequestSchema,
+  listFilesRequestSchema,
   fetchRequestSchema,
   commitRequestSchema,
   heartbeatRequestSchema,
@@ -61,6 +66,7 @@ const movedFileSchema = z.strictObject({ path: pathSchema, had: fileVersionSchem
 export const responseSchema = z.union([
   z.strictObject({ ok: z.literal(true), kind: z.literal("claimed"), task: taskSchema, next: nextSchema }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("intent_accepted"), writes: uniquePaths(pathSchema, (path) => path).min(1), next: nextSchema }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096), next: nextSchema }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("file"), path: pathSchema, version: fileVersionSchema, content: z.string(), next: nextSchema }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("committed"), versions: z.record(pathSchema, fileVersionSchema), next: nextSchema }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("heartbeat"), next: nextSchema }),

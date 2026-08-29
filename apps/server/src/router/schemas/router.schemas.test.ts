@@ -29,6 +29,7 @@ describe("router schemas", () => {
   });
 
   it.each([
+    { kind: "list_files" },
     { kind: "fetch", path: "src/App.tsx" },
     { kind: "heartbeat" },
     { kind: "inbox" },
@@ -96,6 +97,27 @@ describe("router schemas", () => {
       ok: true,
       kind: "committed",
       next: "Continue the task.",
+    }).success).toBe(false);
+  });
+
+  it("lists unique file references without exposing file contents", () => {
+    expect(responseSchema.safeParse({
+      ok: true,
+      kind: "files",
+      files: [
+        { path: "repoA/src/App.tsx", version: 1 },
+        { path: "shared/order-api.contract.md", version: 3 },
+      ],
+      next: "Fetch the files needed for the task.",
+    }).success).toBe(true);
+    expect(responseSchema.safeParse({
+      ok: true,
+      kind: "files",
+      files: [
+        { path: "repoA/src/App.tsx", version: 1 },
+        { path: "repoA/src/App.tsx", version: 1 },
+      ],
+      next: "Fetch the files needed for the task.",
     }).success).toBe(false);
   });
 });

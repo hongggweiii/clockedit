@@ -2,7 +2,14 @@ import { z } from "zod";
 import { hasDuplicates } from "../../utils/collections.js";
 
 
-export const pathSchema = z.string().trim().min(1).max(4_096).refine((value) => !value.includes("\0"));
+export const pathSchema = z.string().trim().min(1).max(4_096)
+  .refine((value) => !value.includes("\0"), "Path must not contain null bytes")
+  .refine((value) => !value.includes("\\"), "Path must use forward slashes")
+  .refine((value) => !value.startsWith("/"), "Path must be relative")
+  .refine(
+    (value) => value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".."),
+    "Path must not contain empty or relative segments",
+  );
 
 export const fileRefSchema = z.strictObject({ path: pathSchema, version: z.number().int().nonnegative() });
 

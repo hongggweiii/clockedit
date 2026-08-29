@@ -15,4 +15,11 @@ describe("file coordination schemas", () => {
       { path: "a.ts", content: "two", based_on: 1 },
     ]).success).toBe(false);
   });
+
+  it.each(["/absolute.ts", "../secret.txt", "src\\App.tsx", "src//App.tsx"])(
+    "rejects unsafe protocol path %s",
+    (filePath) => {
+      expect(fileRefSchema.safeParse({ path: filePath, version: 1 }).success).toBe(false);
+    },
+  );
 });

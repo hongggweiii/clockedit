@@ -9,6 +9,7 @@ describe("private task-server HTTP boundary", () => {
     const app = await createTaskServerApp(
       loadConfig({ NODE_ENV: "test", TASK_SERVER_AUTH_TOKEN: "task-secret" }),
       router,
+      () => null,
     );
 
     expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);

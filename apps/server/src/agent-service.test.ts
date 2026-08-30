@@ -1,12 +1,13 @@
 import { mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import { Router } from "./router/router.js";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
@@ -35,7 +36,7 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner()): Promise<AgentService> {
+async function makeService(runner: AgentRunner = new FakeRunner(), router?: Router): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -51,6 +52,7 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     new JsonStore(path.join(root, "data", "db.json")),
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
+    router,
   );
   await service.initialize();
   return service;
@@ -67,6 +69,25 @@ describe("Agent lifecycle", () => {
     expect((await service.startAgent(agent.id)).status).toBe("ready");
     await service.deleteAgent(agent.id);
     expect(service.listAgents()).toHaveLength(0);
+  });
+
+  it("registers created agents with the coordination router", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(new FakeRunner(), router);
+    const agent = await service.createAgent({ name: "Coordinated" });
+
+    expect(router.hasAgent(agent.id)).toBe(true);
+    await service.deleteAgent(agent.id);
+    expect(router.hasAgent(agent.id)).toBe(false);
+  });
+
+  it("can initialize repeatedly without re-registering agents", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(new FakeRunner(), router);
+    const agent = await service.createAgent({ name: "Idempotent" });
+
+    await expect(service.initialize()).resolves.toBeUndefined();
+    expect(router.hasAgent(agent.id)).toBe(true);
   });
 
   it("persists a playground conversation", async () => {

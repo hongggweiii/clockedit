@@ -1,5 +1,77 @@
 # Volc Agent Launchpad
 
+## Coordination for agent teams
+
+### The problem
+
+When several coding agents work on the same codebase at once, nothing keeps them
+out of each other's way:
+
+- two agents edit the same file and one overwrites the other
+- the backend changes what an endpoint returns, the frontend keeps building
+against the old shape
+- an agent dies mid-task and everything waiting on it stops
+
+Git only catches the first one. Different files in different repos merge cleanly,
+and the code is still broken.
+
+### The idea and design
+
+Agents talk to each other through a server, and the server is the only thing
+allowed to change shared state. The server is plain code holding a task queue and a
+versioned file store, not an LLM, so its decisions are deterministic and
+testable.
+
+Agents' work is committed through the server and validated with read and write
+versioning at commit time:
+
+- an agent fetches the files it needs, works in its own scratch space, then
+commits
+- rejected if a file it **wrote** has changed since the version it based on
+- rejected if a file it **read** has changed since it read it
+- a rejection names the exact paths and versions, so the agent refetches and
+retries
+- after three failed attempts the task is dropped
+
+The read check is the one that earns its keep. An agent can write a file nobody
+else touched and still be rejected, because something it depended on moved.
+
+Two rules make that possible:
+
+- **one writer**: every change goes through a single serialized path in one
+process, so there are no concurrent write problems to solve
+- **empty workspace**: shared files are not on disk in the container, so the only  
+way to read one is to ask the server, which is how the read gets recorded
+
+### The rest of it
+
+- tasks declare an owner, their dependencies, and the paths they intend to write
+- a task is dispatched when its dependencies are done, its owner is idle, and its
+writes do not overlap a task already running
+- agents reach the server through a small command line tool in their workspace
+- every decision is recorded as a numbered event, which is both the audit trail
+and what the dashboard shows
+- humans and agents come in through separate ports
+
+### Limitations
+
+Where this design stops:
+
+- we only see reads that went through the server, so an agent still reasoning
+from something it read earlier is beyond our reach
+- we compare file paths, not meaning, so "this refactor breaks every caller" is
+not something we can express
+- one server, so if it stops, everything stops
+- a task that fails three times is dropped, there is no freeze and no human
+resolution step
+- no agent heartbeats, so an agent that dies is not detected, its task just
+never comes back
+- no per repo permissions, an agent is trusted to stay in its own paths
+- a retried container can commit twice, we do not deduplicate messages
+- repos are versioned files in the store rather than real git
+
+---
+
 A minimal Agent platform for three-day middleware hackathons. It provides Agent
 CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
 Volcengine Ark Responses API.

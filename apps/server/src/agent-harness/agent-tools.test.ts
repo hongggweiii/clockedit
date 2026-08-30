@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { z } from "zod";
 import { afterEach, describe, expect, it } from "vitest";
+import { requestSchema } from "../router/schemas/router.schemas.js";
 import type { RunnerRequest } from "../types.js";
 import {
   assertCoordinationDone,
@@ -43,6 +45,10 @@ describe("Agent coordination tools", () => {
     const installed = await installAgentTools(workspace);
     expect(installed).toBe(path.join(workspace, ".coordination", "agentctl.mjs"));
     expect(await readFile(installed, "utf8")).toContain("COORDINATION_BASE_URL");
+    expect(JSON.parse(await readFile(
+      path.join(workspace, ".coordination", "request-schema.json"),
+      "utf8",
+    ))).toEqual(z.toJSONSchema(requestSchema));
   });
 
   it("provides scoped context without placing secrets in container arguments", () => {
@@ -72,6 +78,7 @@ describe("Agent coordination tools", () => {
     expect(prompt).toContain("submits every tracked edited file");
     expect(prompt).toContain("create-tasks <json-file>");
     expect(prompt).toContain("using an available Agent id as `owner`");
+    expect(prompt).toContain("save that array to the workspace path represented by `<json-file>`");
     expect(prompt).toContain("even when there were no files to commit");
     expect(prompt).not.toContain("agentctl.mjs claim");
     expect(prompt).not.toContain("agentctl.mjs intent");

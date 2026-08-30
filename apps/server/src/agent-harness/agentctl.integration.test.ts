@@ -139,6 +139,36 @@ describe("agentctl", () => {
     expect(received.at(-1)?.body).toEqual({ kind: "create_tasks", tasks });
   });
 
+  it("builds requests through the installed runtime schema", async () => {
+    const schemaPath = path.join(workspace, ".coordination", "request-schema.json");
+    const schema = JSON.parse(await readFile(schemaPath, "utf8")) as {
+      oneOf: Array<{ properties?: { kind?: { const?: string } } }>;
+    };
+    schema.oneOf = schema.oneOf.filter(
+      (variant) => variant.properties?.kind?.const !== "list_files",
+    );
+    await writeFile(schemaPath, JSON.stringify(schema), "utf8");
+
+    await expect(run("list-files")).rejects.toMatchObject({ code: 1 });
+    expect(received).toHaveLength(0);
+  });
+
+  it("rejects task JSON that does not match the installed task request schema", async () => {
+    await writeFile(
+      path.join(workspace, "invalid-tasks.json"),
+      JSON.stringify([{
+        id: "backend-contract",
+        detail: "Update the API contract",
+        depends_on: [],
+        writes: ["contracts/order-api.json"],
+      }]),
+      "utf8",
+    );
+
+    await expect(run("create-tasks", "invalid-tasks.json")).rejects.toMatchObject({ code: 1 });
+    expect(received).toHaveLength(0);
+  });
+
   it("reports done even when no files were edited", async () => {
     await run("done");
     expect(received.at(-1)).toMatchObject({

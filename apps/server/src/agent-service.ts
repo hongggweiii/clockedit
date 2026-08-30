@@ -77,6 +77,7 @@ export class AgentService {
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
       lastError: null,
+      role: input.role?.trim() || null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -102,6 +103,7 @@ export class AgentService {
       if (input.name !== undefined) agent.name = input.name.trim();
       if (input.description !== undefined) agent.description = input.description.trim();
       if (input.instructions !== undefined) agent.instructions = input.instructions.trim();
+      if (input.role !== undefined) agent.role = input.role === null ? null : input.role.trim() || null;
       agent.lastError = null;
       agent.updatedAt = now();
       return structuredClone(agent);
@@ -224,6 +226,86 @@ export class AgentService {
       })
       .catch(() => undefined);
     return { run, message };
+  }
+
+  async runCoordinatedTask(input: {
+    agentId: string;
+    workspacePath: string;
+    prompt: string;
+    taskId: string;
+  }): Promise<{ runId: string; output: string; threadId: string | null }> {
+    if (!isArkConfigured(this.config)) {
+      throw new HttpError(503, "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.");
+    }
+    const timestamp = now();
+    const runId = randomUUID();
+    const run: AgentRun = {
+      id: runId,
+      agentId: input.agentId,
+      status: "running",
+      prompt: input.prompt,
+      output: null,
+      error: null,
+      usage: null,
+      startedAt: timestamp,
+      completedAt: null,
+      createdAt: timestamp,
+    };
+    const agentAtStart = await this.store.mutate((database) => {
+      const stored = database.agents.find((a) => a.id === input.agentId);
+      if (!stored) throw new HttpError(404, "Agent not found");
+      if (stored.status !== "ready") {
+        throw new HttpError(409, `Agent is not ready (status=${stored.status})`);
+      }
+      database.runs.push(run);
+      stored.status = "busy";
+      stored.updatedAt = timestamp;
+      return structuredClone(stored);
+    });
+    try {
+      const result = await this.runner.run({
+        agentId: agentAtStart.id,
+        workspacePath: input.workspacePath,
+        prompt: input.prompt,
+        threadId: agentAtStart.codexThreadId,
+      });
+      const completedAt = now();
+      await this.store.mutate((database) => {
+        const storedRun = database.runs.find((r) => r.id === runId);
+        const agent = database.agents.find((a) => a.id === input.agentId);
+        if (storedRun) {
+          storedRun.status = "completed";
+          storedRun.output = result.output;
+          storedRun.usage = result.usage;
+          storedRun.completedAt = completedAt;
+        }
+        if (agent) {
+          agent.status = "ready";
+          agent.codexThreadId = result.threadId;
+          agent.lastError = null;
+          agent.updatedAt = completedAt;
+        }
+      });
+      return { runId, output: result.output, threadId: result.threadId };
+    } catch (error) {
+      const completedAt = now();
+      const message = error instanceof Error ? error.message : String(error);
+      await this.store.mutate((database) => {
+        const storedRun = database.runs.find((r) => r.id === runId);
+        const agent = database.agents.find((a) => a.id === input.agentId);
+        if (storedRun) {
+          storedRun.status = "failed";
+          storedRun.error = message;
+          storedRun.completedAt = completedAt;
+        }
+        if (agent) {
+          agent.status = "ready";
+          agent.lastError = message;
+          agent.updatedAt = completedAt;
+        }
+      });
+      throw error;
+    }
   }
 
   async systemInfo(): Promise<Record<string, unknown>> {

@@ -92,4 +92,10 @@ describe("Router", () => {
     expect(router.getEvents().at(-1)).toMatchObject({ type: "error", error: "backend unavailable" });
   });
 
+  it("does not allow duplicate connected registrations", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const channel = { send: vi.fn() };
+    router.registerAgent("agent-1", channel);
+    expect(() => router.registerAgent("agent-1", channel)).toThrow("already connected");
+  });
 });

@@ -56,7 +56,7 @@ export function createRouter(coordinator: RouterCoordinator): Router {
   return new Router(coordinator);
 }
 
-/** Private protocol boundary. Agent channels are registered during startup. */
+/** Private protocol boundary. An agent is registered when its transport connects. */
 export class Router {
   private readonly agents = new Map<string, { channel: AgentChannel; description?: AgentProfile["description"] }>();
   private readonly events: RouterEvent[] = [];
@@ -70,11 +70,13 @@ export class Router {
 
   registerAgent(agentId: string, channel: AgentChannel, profile: Partial<Pick<AgentProfile, "description">> = {}): () => void {
     if (!agentId.trim()) throw new Error("agentId is required");
-    this.agents.set(agentId, {
+    if (this.agents.has(agentId)) throw new Error(`Agent is already connected: ${agentId}`);
+    const registration = {
       channel,
       ...(profile.description !== undefined ? { description: profile.description } : {}),
-    });
-    return () => { if (this.agents.get(agentId)?.channel === channel) this.agents.delete(agentId); };
+    };
+    this.agents.set(agentId, registration);
+    return () => { if (this.agents.get(agentId) === registration) this.agents.delete(agentId); };
   }
 
   updateAgentProfile(agentId: string, profile: Pick<AgentProfile, "description">): void {

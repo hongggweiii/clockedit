@@ -80,3 +80,44 @@ the stored Codex thread, and escalate termination after a grace period.
 
 The current container or ECS instance is the POC trust boundary. Ordinary
 containers are not hardened multi-tenant isolation.
+
+# Task-server boundary
+
+The task-server is a private protocol service, separate from the frontend
+HTTP app. `Router` is the seam between agent transports and task coordination:
+agents register a channel during initialization, agent messages are validated
+against the router schemas, and coordinator results are validated again before
+they are returned or dispatched to an agent.
+
+`createTaskServerApp` exposes only `/health` and authenticated `/messages`; it
+does not register CORS, static files, or frontend routes. The eventual process
+initializer should construct the coordinator, construct `Router` with the
+coordinator, register each initialized agent, and listen on a private host or
+network interface. The frontend uses `APP_AUTH_TOKEN`; agent traffic uses the
+separate `TASK_SERVER_AUTH_TOKEN`. Successful `done` requests receive a JSON
+acknowledgement for compatibility with `agentctl`. A WebSocket/SSE adapter can use
+`Router.dispatch` without changing the coordinator or protocol schemas.
+
+An `agentctl` client can send a message like this:
+
+```sh
+TASK_SERVER_URL=http://127.0.0.1:4000 \\
+TASK_SERVER_AUTH_TOKEN="$TASK_SERVER_AUTH_TOKEN" \\
+AGENT_ID=agent-1 \\
+node - <<'NODE'
+const response = await fetch(`${process.env.TASK_SERVER_URL}/messages`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${process.env.TASK_SERVER_AUTH_TOKEN}`,
+  },
+  body: JSON.stringify({
+    msg_id: crypto.randomUUID(),
+    agent: process.env.AGENT_ID,
+    task_id: null,
+    body: { kind: "fetch", paths: ["src/App.tsx", "src/api.ts"] },
+  }),
+});
+console.log(response.status, await response.text());
+NODE
+```

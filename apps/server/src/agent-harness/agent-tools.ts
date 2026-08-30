@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunnerRequest } from "../types.js";
@@ -7,12 +7,42 @@ const toolDirectoryName = ".coordination";
 const toolFileName = "agentctl.mjs";
 const toolSource = fileURLToPath(new URL("./agentctl.mjs", import.meta.url));
 
+export const coordinationWorkflowInstructions = [
+  "- Use `node .coordination/agentctl.mjs list-files` whenever you need to discover shared files to read or edit.",
+  "- Use `node .coordination/agentctl.mjs fetch <path>` before reading or editing a shared file.",
+  "- After creating, editing, or deleting a file, immediately run `node .coordination/agentctl.mjs mark-edited <path>...` so every changed path is tracked.",
+  "- Before finishing, run `node .coordination/agentctl.mjs commit`; it submits every tracked edited file together.",
+  "- If commit reports `STALE`, list and fetch the moved files, reapply the required changes, mark the edited paths, and retry commit.",
+  "- If available Agent profiles are provided and another Agent is better suited to a subtask, write a JSON array of tasks with `id`, `detail`, `owner`, `depends_on`, and `writes`, using an available Agent id as `owner`, then run `node .coordination/agentctl.mjs create-tasks <json-file>`.",
+  "- Always run `node .coordination/agentctl.mjs done` when the task is finished, even when there were no files to commit.",
+];
+
 export async function installAgentTools(workspacePath: string): Promise<string> {
   const toolDirectory = path.join(workspacePath, toolDirectoryName);
   await mkdir(toolDirectory, { recursive: true });
   const destination = path.join(toolDirectory, toolFileName);
   await copyFile(toolSource, destination);
   return destination;
+}
+
+export async function assertCoordinationDone(request: RunnerRequest): Promise<void> {
+  if (!request.coordination?.taskId) return;
+  const markerPath = path.join(
+    request.workspacePath,
+    toolDirectoryName,
+    "state.json",
+  );
+  try {
+    const state = JSON.parse(await readFile(markerPath, "utf8")) as {
+      doneTaskId?: unknown;
+    };
+    if (state.doneTaskId === request.coordination.taskId) return;
+  } catch {
+    // The error below gives the Agent-facing action for missing and invalid state.
+  }
+  throw new Error(
+    "Coordinated task finished without `node .coordination/agentctl.mjs done` succeeding",
+  );
 }
 
 export function coordinationEnvironment(
@@ -45,11 +75,6 @@ export function promptWithCoordinationTools(request: RunnerRequest): string {
     request.prompt,
     "",
     "Coordination requirements:",
-    "- Use `node .coordination/agentctl.mjs list-files` to discover available shared paths.",
-    "- Use `node .coordination/agentctl.mjs intent <path>...` before editing shared files.",
-    "- Use `node .coordination/agentctl.mjs fetch <path>` instead of reading shared storage directly.",
-    "- Use `node .coordination/agentctl.mjs commit <path>...` to submit completed files.",
-    "- If a protocol command fails, read its JSON error and follow the `next` instruction.",
-    "- Run `node .coordination/agentctl.mjs done` only after the final commit succeeds.",
+    ...coordinationWorkflowInstructions,
   ].join("\n");
 }

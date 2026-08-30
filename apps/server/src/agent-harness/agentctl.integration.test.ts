@@ -39,49 +39,20 @@ describe("agentctl", () => {
             { path: "contracts/order-api.json", version: 2 },
             { path: "src/App.tsx", version: 3 },
           ],
-          next: "Fetch the files needed for the task.",
         };
       } else if (body.kind === "fetch") {
+        const requestedPath = body.paths[0];
         result = {
           ok: true,
           kind: "file",
-          path: body.path,
-          version: body.path.startsWith("contracts/") ? 2 : 3,
-          content: body.path.startsWith("contracts/") ? "{\"field\":\"order_id\"}" : "old",
-          next: "Use this version when committing.",
+          path: requestedPath,
+          version: requestedPath?.startsWith("contracts/") ? 2 : 3,
+          content: requestedPath?.startsWith("contracts/")
+            ? '{"field":"order_id"}'
+            : "old",
         };
-      } else if (body.kind === "commit") {
-        result = {
-          ok: true,
-          kind: "committed",
-          versions: Object.fromEntries(body.writes.map((write) => [write.path, 4])),
-          next: "Report the task as done.",
-        };
-      } else if (body.kind === "claim") {
-        result = {
-          ok: true,
-          kind: "claimed",
-          task: {
-            id: "frontend-button",
-            detail: "Build the button",
-            state: "assigned",
-            owner: "frontend",
-            depends_on: [],
-            writes: ["src/App.tsx"],
-            strikes: 0,
-          },
-          next: "Declare intent.",
-        };
-      } else if (body.kind === "intent") {
-        result = { ok: true, kind: "intent_accepted", writes: body.writes, next: "Fetch files." };
-      } else if (body.kind === "heartbeat") {
-        result = { ok: true, kind: "heartbeat", next: "Continue." };
-      } else if (body.kind === "inbox") {
-        result = { ok: true, kind: "inbox", tasks: [], events: [], next: "Wait for work." };
-      } else if (body.kind === "done") {
-        result = { ok: true, kind: "done", task_id: "frontend-button", next: "Wait for work." };
       } else {
-        result = { ok: true, kind: "tasks_created", tasks: [], next: "Dispatch tasks." };
+        result = { ok: true, kind: "committed" };
       }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(result));
@@ -112,34 +83,33 @@ describe("agentctl", () => {
     });
   }
 
-  it("fetches tracked files and commits writes with read evidence", async () => {
+  it("fetches dependencies and commits every tracked edited file", async () => {
     await run("fetch", "contracts/order-api.json");
     await run("fetch", "src/App.tsx");
-    expect(await readFile(path.join(workspace, "contracts", "order-api.json"), "utf8"))
-      .toBe('{"field":"order_id"}');
     await writeFile(path.join(workspace, "src", "App.tsx"), "updated", "utf8");
+    await writeFile(path.join(workspace, "new.ts"), "created", "utf8");
+    await run("mark-edited", "src/App.tsx", "new.ts");
 
-    const committed = await run("commit", "src/App.tsx");
-    expect(JSON.parse(committed.stdout)).toMatchObject({
-      ok: true,
-      kind: "committed",
-      versions: { "src/App.tsx": 4 },
-    });
+    const committed = await run("commit");
+    expect(JSON.parse(committed.stdout)).toEqual({ ok: true, kind: "committed" });
 
     const commitEnvelope = received.find((envelope) => envelope.body.kind === "commit");
     expect(commitEnvelope?.task_id).toBe("frontend-button");
     expect(commitEnvelope?.body).toEqual({
       kind: "commit",
-      writes: [{ path: "src/App.tsx", content: "updated", based_on: 3 }],
+      writes: [
+        { path: "new.ts", content: "created", based_on: null },
+        { path: "src/App.tsx", content: "updated", based_on: 3 },
+      ],
       reads: [{ path: "contracts/order-api.json", version: 2 }],
     });
     expect(JSON.parse(await readFile(
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
-    ))).toMatchObject({ versions: { "src/App.tsx": 4 } });
+    ))).toEqual({ versions: {}, edited: [], doneTaskId: null });
   });
 
-  it("discovers file paths before fetching their contents", async () => {
+  it("discovers paths without fetching contents or creating local state", async () => {
     const listed = await run("list-files");
     expect(JSON.parse(listed.stdout)).toEqual({
       ok: true,
@@ -148,29 +118,48 @@ describe("agentctl", () => {
         { path: "contracts/order-api.json", version: 2 },
         { path: "src/App.tsx", version: 3 },
       ],
-      next: "Fetch the files needed for the task.",
     });
     expect(received.at(-1)?.body).toEqual({ kind: "list_files" });
+    await expect(readFile(
+      path.join(workspace, ".coordination", "state.json"),
+      "utf8",
+    )).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("submits owner-aware tasks from the instructed JSON file", async () => {
+    const tasks = [{
+      id: "backend-contract",
+      detail: "Update the API contract",
+      owner: "backend",
+      depends_on: [],
+      writes: ["contracts/order-api.json"],
+    }];
+    await writeFile(path.join(workspace, "tasks.json"), JSON.stringify(tasks), "utf8");
+    await run("create-tasks", "tasks.json");
+    expect(received.at(-1)?.body).toEqual({ kind: "create_tasks", tasks });
+  });
+
+  it("reports done even when no files were edited", async () => {
+    await run("done");
+    expect(received.at(-1)).toMatchObject({
+      task_id: "frontend-button",
+      body: { kind: "done" },
+    });
+    expect(JSON.parse(await readFile(
+      path.join(workspace, ".coordination", "state.json"),
+      "utf8",
+    ))).toEqual({ versions: {}, edited: [], doneTaskId: "frontend-button" });
+  });
+
+  it("rejects removed pull-model commands without sending messages", async () => {
+    for (const command of ["claim", "intent", "heartbeat", "inbox"]) {
+      await expect(run(command)).rejects.toMatchObject({ code: 1 });
+    }
+    expect(received).toHaveLength(0);
   });
 
   it("rejects paths that escape the workspace before sending a message", async () => {
     await expect(run("fetch", "../secret.txt")).rejects.toMatchObject({ code: 1 });
     expect(received).toHaveLength(0);
-  });
-
-  it("uses task-scoped envelopes for lifecycle commands", async () => {
-    await run("claim");
-    await run("intent", "src/App.tsx");
-    await run("heartbeat");
-    await run("inbox");
-    await run("done");
-
-    expect(received.map((envelope) => [envelope.body.kind, envelope.task_id])).toEqual([
-      ["claim", "frontend-button"],
-      ["intent", "frontend-button"],
-      ["heartbeat", "frontend-button"],
-      ["inbox", "frontend-button"],
-      ["done", "frontend-button"],
-    ]);
   });
 });

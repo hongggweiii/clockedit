@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RunnerRequest } from "../types.js";
 import {
+  assertCoordinationDone,
   coordinationContainerEnvArgs,
   coordinationEnvironment,
   installAgentTools,
@@ -60,13 +61,40 @@ describe("Agent coordination tools", () => {
 
   it("adds tool instructions only to coordinated runs", () => {
     const request = coordinatedRequest();
-    expect(promptWithCoordinationTools(request)).toContain(
+    const prompt = promptWithCoordinationTools(request);
+    expect(prompt).toContain(
       "node .coordination/agentctl.mjs list-files",
     );
-    expect(promptWithCoordinationTools(request)).toContain(
+    expect(prompt).toContain(
       "node .coordination/agentctl.mjs fetch <path>",
     );
+    expect(prompt).toContain("mark-edited <path>");
+    expect(prompt).toContain("submits every tracked edited file");
+    expect(prompt).toContain("create-tasks <json-file>");
+    expect(prompt).toContain("using an available Agent id as `owner`");
+    expect(prompt).toContain("even when there were no files to commit");
+    expect(prompt).not.toContain("agentctl.mjs claim");
+    expect(prompt).not.toContain("agentctl.mjs intent");
     const { coordination: _coordination, ...plain } = request;
     expect(promptWithCoordinationTools(plain)).toBe(request.prompt);
+  });
+
+  it("requires a successful done marker before a coordinated task completes", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "agent-tools-done-"));
+    temporaryDirectories.push(workspace);
+    const request = { ...coordinatedRequest(), workspacePath: workspace };
+
+    await expect(assertCoordinationDone(request)).rejects.toThrow(/without.*done/s);
+    await mkdir(path.join(workspace, ".coordination"));
+    await writeFile(
+      path.join(workspace, ".coordination", "state.json"),
+      JSON.stringify({ versions: {}, edited: [], doneTaskId: "frontend-button" }),
+      "utf8",
+    );
+    await expect(assertCoordinationDone(request)).resolves.toBeUndefined();
+    await expect(assertCoordinationDone({
+      ...request,
+      coordination: { ...request.coordination, taskId: "task-2" },
+    })).rejects.toThrow(/without.*done/s);
   });
 });

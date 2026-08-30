@@ -1,23 +1,41 @@
 #!/usr/bin/env node
+// @ts-check
 
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/** @typedef {import("../router/router.types.js").Request} Request */
+/** @typedef {{ versions: Record<string, number>, edited: string[], doneTaskId: string | null }} CoordinationState */
+/** @typedef {{ ok: boolean, [key: string]: any }} ProtocolResponse */
+
 const stateDirectoryName = ".coordination";
 const stateFileName = "state.json";
 
+/**
+ * @param {string} message
+ * @param {unknown} [detail]
+ * @param {number} [code]
+ * @returns {never}
+ */
 function exitWithError(message, detail, code = 1) {
   process.stderr.write(JSON.stringify({ ok: false, error: message, detail }) + "\n");
   process.exit(code);
 }
 
+/** @param {string} name */
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
   if (!value) exitWithError(`${name} is required`);
   return value;
 }
 
+/** @param {unknown} error */
+function isMissingFile(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+/** @param {string} value */
 function normalizeProtocolPath(value) {
   const candidate = value.trim();
   if (!candidate) exitWithError("File path must not be empty");
@@ -37,6 +55,7 @@ function normalizeProtocolPath(value) {
   return candidate;
 }
 
+/** @param {string[]} values */
 function uniquePaths(values) {
   const paths = values.map(normalizeProtocolPath);
   if (new Set(paths).size !== paths.length) {
@@ -45,6 +64,7 @@ function uniquePaths(values) {
   return paths;
 }
 
+/** @param {string} protocolPath */
 function workspacePath(protocolPath) {
   const root = path.resolve(process.cwd());
   const resolved = path.resolve(root, ...protocolPath.split("/"));
@@ -59,25 +79,56 @@ function statePath() {
   return path.join(process.cwd(), stateDirectoryName, stateFileName);
 }
 
+/** @returns {CoordinationState} */
+function emptyState() {
+  return { versions: Object.create(null), edited: [], doneTaskId: null };
+}
+
+/** @returns {Promise<CoordinationState>} */
 async function readState() {
   try {
+    /** @type {unknown} */
     const parsed = JSON.parse(await readFile(statePath(), "utf8"));
-    if (!parsed || typeof parsed !== "object" || !parsed.versions || typeof parsed.versions !== "object") {
-      throw new Error("Invalid state shape");
+    if (!parsed || typeof parsed !== "object") throw new Error("Invalid state shape");
+    const candidate = /** @type {{ versions?: unknown, edited?: unknown, doneTaskId?: unknown }} */ (parsed);
+    if (!candidate.versions || typeof candidate.versions !== "object") {
+      throw new Error("Invalid state versions");
     }
-    for (const [filePath, version] of Object.entries(parsed.versions)) {
+    /** @type {Record<string, number>} */
+    const versions = Object.create(null);
+    for (const [filePath, version] of Object.entries(candidate.versions)) {
       normalizeProtocolPath(filePath);
-      if (!Number.isInteger(version) || version < 0) throw new Error("Invalid file version");
+      if (!Number.isInteger(version) || /** @type {number} */ (version) < 0) {
+        throw new Error("Invalid file version");
+      }
+      versions[filePath] = /** @type {number} */ (version);
     }
-    return { versions: Object.assign(Object.create(null), parsed.versions) };
+    const edited = candidate.edited === undefined ? [] : candidate.edited;
+    if (!Array.isArray(edited) || edited.some((value) => typeof value !== "string")) {
+      throw new Error("Invalid edited file list");
+    }
+    const normalizedEdited = uniquePaths(/** @type {string[]} */ (edited));
+    if (
+      candidate.doneTaskId !== undefined &&
+      candidate.doneTaskId !== null &&
+      typeof candidate.doneTaskId !== "string"
+    ) {
+      throw new Error("Invalid done task id");
+    }
+    return {
+      versions,
+      edited: normalizedEdited,
+      doneTaskId: typeof candidate.doneTaskId === "string"
+        ? candidate.doneTaskId
+        : null,
+    };
   } catch (error) {
-    if (error && typeof error === "object" && error.code === "ENOENT") {
-      return { versions: Object.create(null) };
-    }
+    if (isMissingFile(error)) return emptyState();
     exitWithError("Unable to read coordination state", error instanceof Error ? error.message : String(error));
   }
 }
 
+/** @param {CoordinationState} state */
 async function writeState(state) {
   const directory = path.dirname(statePath());
   await mkdir(directory, { recursive: true });
@@ -86,12 +137,20 @@ async function writeState(state) {
   await rename(temporary, statePath());
 }
 
+/** @param {boolean} required */
 function taskId(required) {
   const value = process.env.COORDINATION_TASK_ID?.trim() || null;
   if (required && !value) exitWithError("COORDINATION_TASK_ID is required for this command");
   return value;
 }
 
+/**
+ * Outgoing bodies are checked against the Zod-inferred Request union during
+ * the server typecheck so command payloads stay aligned with the wire schema.
+ * @param {Request} body
+ * @param {boolean} [requiresTask]
+ * @returns {Promise<ProtocolResponse>}
+ */
 async function send(body, requiresTask = false) {
   const baseUrl = requiredEnvironment("COORDINATION_BASE_URL");
   const projectId = requiredEnvironment("COORDINATION_PROJECT_ID");
@@ -100,10 +159,12 @@ async function send(body, requiresTask = false) {
     `api/projects/${encodeURIComponent(projectId)}/coordination/messages`,
     baseUrl.endsWith("/") ? baseUrl : baseUrl + "/",
   );
+  /** @type {Record<string, string>} */
   const headers = { "content-type": "application/json" };
   const authToken = process.env.COORDINATION_AUTH_TOKEN?.trim();
   if (authToken) headers.authorization = `Bearer ${authToken}`;
 
+  /** @type {globalThis.Response} */
   let response;
   try {
     response = await fetch(endpoint, {
@@ -121,6 +182,7 @@ async function send(body, requiresTask = false) {
   }
 
   const text = await response.text();
+  /** @type {unknown} */
   let payload;
   try {
     payload = JSON.parse(text);
@@ -130,16 +192,18 @@ async function send(body, requiresTask = false) {
   if (!response.ok) {
     exitWithError("Coordination server rejected the HTTP request", { status: response.status, response: payload });
   }
-  if (!payload || typeof payload !== "object" || typeof payload.ok !== "boolean") {
+  if (!payload || typeof payload !== "object" || !("ok" in payload) || typeof payload.ok !== "boolean") {
     exitWithError("Coordination server returned an invalid protocol response", payload);
   }
-  if (!payload.ok) {
-    process.stderr.write(JSON.stringify(payload, null, 2) + "\n");
+  const protocolResponse = /** @type {ProtocolResponse} */ (payload);
+  if (!protocolResponse.ok) {
+    process.stderr.write(JSON.stringify(protocolResponse, null, 2) + "\n");
     process.exit(2);
   }
-  return payload;
+  return protocolResponse;
 }
 
+/** @param {ProtocolResponse} response @param {string} kind */
 function expectResponseKind(response, kind) {
   if (response.kind !== kind) {
     exitWithError(`Expected a ${kind} response`, response);
@@ -147,44 +211,11 @@ function expectResponseKind(response, kind) {
   return response;
 }
 
-async function claim(args) {
-  if (args.length > 0) exitWithError("Usage: agentctl claim");
-  return expectResponseKind(await send({ kind: "claim" }, true), "claimed");
-}
-
-async function intent(args) {
-  if (args.length === 0) exitWithError("Usage: agentctl intent <path> [path ...]");
-  return expectResponseKind(
-    await send({ kind: "intent", writes: uniquePaths(args) }, true),
-    "intent_accepted",
-  );
-}
-
-async function fetchFile(args) {
-  if (args.length !== 1) exitWithError("Usage: agentctl fetch <path>");
-  const requestedPath = normalizeProtocolPath(args[0]);
-  const response = await send({ kind: "fetch", path: requestedPath });
-  if (
-    response.kind !== "file" ||
-    response.path !== requestedPath ||
-    !Number.isInteger(response.version) ||
-    response.version < 0 ||
-    typeof response.content !== "string"
-  ) {
-    exitWithError("Fetch returned an invalid file response", response);
-  }
-  const destination = workspacePath(requestedPath);
-  await mkdir(path.dirname(destination), { recursive: true });
-  await writeFile(destination, response.content, "utf8");
-  const state = await readState();
-  state.versions[requestedPath] = response.version;
-  await writeState(state);
-  return response;
-}
-
+/** @param {string[]} args */
 async function listFiles(args) {
   if (args.length !== 0) exitWithError("Usage: agentctl list-files");
-  const response = await send({ kind: "list_files" });
+  const request = /** @satisfies {Extract<Request, { kind: "list_files" }>} */ ({ kind: "list_files" });
+  const response = await send(request);
   if (response.kind !== "files" || !Array.isArray(response.files)) {
     exitWithError("List files returned an invalid response", response);
   }
@@ -202,57 +233,125 @@ async function listFiles(args) {
   return response;
 }
 
-async function commit(args) {
-  if (args.length === 0) exitWithError("Usage: agentctl commit <path> [path ...]");
-  const paths = uniquePaths(args);
+/** @param {string[]} args */
+async function fetchFile(args) {
+  if (args.length !== 1) exitWithError("Usage: agentctl fetch <path>");
+  const requestedPath = normalizeProtocolPath(args[0] ?? "");
+  const request = /** @satisfies {Extract<Request, { kind: "fetch" }>} */ ({
+    kind: "fetch",
+    paths: [requestedPath],
+  });
+  const response = await send(request);
+  if (
+    response.kind !== "file" ||
+    response.path !== requestedPath ||
+    !Number.isInteger(response.version) ||
+    response.version < 0 ||
+    typeof response.content !== "string"
+  ) {
+    exitWithError("Fetch returned an invalid file response", response);
+  }
+  const destination = workspacePath(requestedPath);
+  await mkdir(path.dirname(destination), { recursive: true });
+  await writeFile(destination, response.content, "utf8");
   const state = await readState();
-  const writes = [];
-  for (const filePath of paths) {
-    let content;
-    try {
-      content = await readFile(workspacePath(filePath), "utf8");
-    } catch (error) {
-      exitWithError("Unable to read a file selected for commit", {
-        path: filePath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    writes.push({
-      path: filePath,
-      content,
-      based_on: state.versions[filePath] ?? null,
-    });
-  }
-  const written = new Set(paths);
-  const reads = Object.entries(state.versions)
-    .filter(([filePath]) => !written.has(filePath))
-    .map(([filePath, version]) => ({ path: filePath, version }));
-  const response = await send({ kind: "commit", writes, reads }, true);
-  if (response.kind !== "committed" || !response.versions || typeof response.versions !== "object") {
-    exitWithError("Commit returned an invalid response", response);
-  }
-  for (const [filePath, version] of Object.entries(response.versions)) {
-    const normalized = normalizeProtocolPath(filePath);
-    if (!Number.isInteger(version) || version < 0) {
-      exitWithError("Commit returned an invalid version", { path: normalized, version });
-    }
-    state.versions[normalized] = version;
-  }
+  state.versions[requestedPath] = response.version;
+  state.edited = state.edited.filter((filePath) => filePath !== requestedPath);
+  state.doneTaskId = null;
   await writeState(state);
   return response;
 }
 
+/** @param {string[]} args */
+async function markEdited(args) {
+  if (args.length === 0) exitWithError("Usage: agentctl mark-edited <path> [path ...]");
+  const paths = uniquePaths(args);
+  paths.forEach(workspacePath);
+  const state = await readState();
+  state.edited = [...new Set([...state.edited, ...paths])].sort();
+  state.doneTaskId = null;
+  await writeState(state);
+  return { ok: true, kind: "edited_tracked", paths: state.edited };
+}
+
+/** @param {string[]} args */
+async function commit(args) {
+  if (args.length !== 0) exitWithError("Usage: agentctl commit");
+  const state = await readState();
+  if (state.edited.length === 0) {
+    exitWithError("No edited files are tracked; use mark-edited after changing a file");
+  }
+  /** @type {Extract<Request, { kind: "commit" }>["writes"]} */
+  const writes = [];
+  for (const filePath of state.edited) {
+    try {
+      writes.push({
+        path: filePath,
+        content: await readFile(workspacePath(filePath), "utf8"),
+        based_on: state.versions[filePath] ?? null,
+      });
+    } catch (error) {
+      if (isMissingFile(error) && state.versions[filePath] !== undefined) {
+        writes.push({
+          path: filePath,
+          content: "",
+          based_on: state.versions[filePath],
+          delete: true,
+        });
+        continue;
+      }
+      exitWithError("Unable to read a tracked edited file", {
+        path: filePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const written = new Set(state.edited);
+  const reads = Object.entries(state.versions)
+    .filter(([filePath]) => !written.has(filePath))
+    .map(([filePath, version]) => ({ path: filePath, version }));
+  const request = /** @satisfies {Extract<Request, { kind: "commit" }>} */ ({
+    kind: "commit",
+    writes,
+    reads,
+  });
+  const response = expectResponseKind(await send(request), "committed");
+  state.versions = Object.create(null);
+  state.edited = [];
+  state.doneTaskId = null;
+  await writeState(state);
+  return response;
+}
+
+/** @param {string[]} args */
 async function createTasks(args) {
   if (args.length !== 1) exitWithError("Usage: agentctl create-tasks <json-file>");
-  const inputPath = normalizeProtocolPath(args[0]);
-  let tasks;
+  const inputPath = normalizeProtocolPath(args[0] ?? "");
+  /** @type {unknown} */
+  let parsed;
   try {
-    tasks = JSON.parse(await readFile(workspacePath(inputPath), "utf8"));
+    parsed = JSON.parse(await readFile(workspacePath(inputPath), "utf8"));
   } catch (error) {
     exitWithError("Unable to read task JSON", error instanceof Error ? error.message : String(error));
   }
-  if (!Array.isArray(tasks)) exitWithError("Task JSON must contain an array");
-  return expectResponseKind(await send({ kind: "create_tasks", tasks }), "tasks_created");
+  if (!Array.isArray(parsed)) exitWithError("Task JSON must contain an array");
+  const tasks = /** @type {Extract<Request, { kind: "create_tasks" }>["tasks"]} */ (parsed);
+  const request = /** @satisfies {Extract<Request, { kind: "create_tasks" }>} */ ({
+    kind: "create_tasks",
+    tasks,
+  });
+  return send(request);
+}
+
+/** @param {string[]} args */
+async function done(args) {
+  if (args.length !== 0) exitWithError("Usage: agentctl done");
+  const request = /** @satisfies {Extract<Request, { kind: "done" }>} */ ({ kind: "done" });
+  const response = await send(request, true);
+  const state = await readState();
+  state.doneTaskId = taskId(true);
+  await writeState(state);
+  return response;
 }
 
 function usage() {
@@ -260,57 +359,41 @@ function usage() {
     "Usage: agentctl <command>",
     "",
     "Commands:",
-    "  claim",
-    "  intent <path> [path ...]",
     "  list-files",
     "  fetch <path>",
-    "  commit <path> [path ...]",
-    "  heartbeat",
-    "  inbox",
-    "  done",
+    "  mark-edited <path> [path ...]",
+    "  commit",
     "  create-tasks <json-file>",
+    "  done",
   ].join("\n");
 }
 
 const [command, ...args] = process.argv.slice(2);
 let result;
 switch (command) {
-  case "claim":
-    result = await claim(args);
-    break;
-  case "intent":
-    result = await intent(args);
+  case "list-files":
+    result = await listFiles(args);
     break;
   case "fetch":
     result = await fetchFile(args);
     break;
-  case "list-files":
-    result = await listFiles(args);
+  case "mark-edited":
+    result = await markEdited(args);
     break;
   case "commit":
     result = await commit(args);
     break;
-  case "heartbeat":
-    if (args.length > 0) exitWithError("Usage: agentctl heartbeat");
-    result = expectResponseKind(await send({ kind: "heartbeat" }), "heartbeat");
-    break;
-  case "inbox":
-    if (args.length > 0) exitWithError("Usage: agentctl inbox");
-    result = expectResponseKind(await send({ kind: "inbox" }), "inbox");
-    break;
-  case "done":
-    if (args.length > 0) exitWithError("Usage: agentctl done");
-    result = expectResponseKind(await send({ kind: "done" }, true), "done");
-    break;
   case "create-tasks":
     result = await createTasks(args);
+    break;
+  case "done":
+    result = await done(args);
     break;
   case "help":
   case "--help":
   case "-h":
     process.stdout.write(usage() + "\n");
     process.exit(0);
-    break;
   default:
     process.stderr.write(usage() + "\n");
     process.exit(1);

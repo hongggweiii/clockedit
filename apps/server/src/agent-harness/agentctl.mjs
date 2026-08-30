@@ -4,14 +4,23 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  buildCommitRequest,
+  buildCreateTasksRequest,
+  buildDoneRequest,
+  buildEnvelope,
+  buildFetchRequest,
+  buildListFilesRequest,
+} from "../router/request-builders.js";
 
 /** @typedef {import("../router/router.types.js").Request} Request */
+/** @typedef {import("../router/router.types.js").CommitRequest["writes"]} FileWrites */
+/** @typedef {import("../router/router.types.js").CreateTasksRequest["tasks"]} NewTasks */
 /** @typedef {{ versions: Record<string, number>, edited: string[], doneTaskId: string | null }} CoordinationState */
 /** @typedef {{ ok: boolean, [key: string]: any }} ProtocolResponse */
 
 const stateDirectoryName = ".coordination";
 const stateFileName = "state.json";
-const requestSchemaFileName = "request-schema.json";
 
 /**
  * @param {string} message
@@ -80,149 +89,6 @@ function statePath() {
   return path.join(process.cwd(), stateDirectoryName, stateFileName);
 }
 
-function requestSchemaPath() {
-  return path.join(process.cwd(), stateDirectoryName, requestSchemaFileName);
-}
-
-/** @param {unknown} value */
-function isRecord(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Validate the JSON Schema subset emitted by Zod for coordination requests.
- * @param {any} schema
- * @param {any} value
- * @param {string} [location]
- * @returns {string[]}
- */
-function jsonSchemaIssues(schema, value, location = "$") {
-  if (!isRecord(schema)) return [`${location}: invalid installed schema`];
-
-  if (Array.isArray(schema.oneOf)) {
-    const matches = schema.oneOf.filter(
-      /** @param {any} variant */
-      (variant) => jsonSchemaIssues(variant, value, location).length === 0,
-    );
-    return matches.length === 1
-      ? []
-      : [`${location}: value must match exactly one request schema`];
-  }
-
-  if (Array.isArray(schema.anyOf)) {
-    return schema.anyOf.some(
-      /** @param {any} variant */
-      (variant) => jsonSchemaIssues(variant, value, location).length === 0,
-    )
-      ? []
-      : [`${location}: value does not match an allowed schema`];
-  }
-
-  if (Object.hasOwn(schema, "const") && value !== schema.const) {
-    return [`${location}: expected ${JSON.stringify(schema.const)}`];
-  }
-  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
-    return [`${location}: value is not in the allowed set`];
-  }
-
-  if (schema.type === "null") {
-    return value === null ? [] : [`${location}: expected null`];
-  }
-  if (schema.type === "boolean") {
-    return typeof value === "boolean" ? [] : [`${location}: expected boolean`];
-  }
-  if (schema.type === "integer") {
-    if (!Number.isInteger(value)) return [`${location}: expected integer`];
-    if (typeof schema.minimum === "number" && value < schema.minimum) {
-      return [`${location}: value is below the minimum`];
-    }
-    if (typeof schema.maximum === "number" && value > schema.maximum) {
-      return [`${location}: value is above the maximum`];
-    }
-    return [];
-  }
-  if (schema.type === "number") {
-    return typeof value === "number" && Number.isFinite(value)
-      ? []
-      : [`${location}: expected number`];
-  }
-  if (schema.type === "string") {
-    if (typeof value !== "string") return [`${location}: expected string`];
-    if (typeof schema.minLength === "number" && value.length < schema.minLength) {
-      return [`${location}: string is shorter than allowed`];
-    }
-    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) {
-      return [`${location}: string is longer than allowed`];
-    }
-    return [];
-  }
-  if (schema.type === "array") {
-    if (!Array.isArray(value)) return [`${location}: expected array`];
-    const issues = [];
-    if (typeof schema.minItems === "number" && value.length < schema.minItems) {
-      issues.push(`${location}: array has too few items`);
-    }
-    if (typeof schema.maxItems === "number" && value.length > schema.maxItems) {
-      issues.push(`${location}: array has too many items`);
-    }
-    if (schema.items) {
-      value.forEach((item, index) => {
-        issues.push(...jsonSchemaIssues(schema.items, item, `${location}[${index}]`));
-      });
-    }
-    return issues;
-  }
-  if (schema.type === "object") {
-    if (!isRecord(value)) return [`${location}: expected object`];
-    const properties = isRecord(schema.properties) ? schema.properties : {};
-    const required = Array.isArray(schema.required) ? schema.required : [];
-    const issues = [];
-    for (const name of required) {
-      if (typeof name === "string" && !Object.hasOwn(value, name)) {
-        issues.push(`${location}.${name}: required property is missing`);
-      }
-    }
-    if (schema.additionalProperties === false) {
-      for (const name of Object.keys(value)) {
-        if (!Object.hasOwn(properties, name)) {
-          issues.push(`${location}.${name}: property is not allowed`);
-        }
-      }
-    }
-    for (const [name, propertySchema] of Object.entries(properties)) {
-      if (Object.hasOwn(value, name)) {
-        issues.push(...jsonSchemaIssues(propertySchema, value[name], `${location}.${name}`));
-      }
-    }
-    return issues;
-  }
-
-  return [`${location}: unsupported installed schema`];
-}
-
-/**
- * Build a request through the runtime schema generated from router/schemas.
- * @param {unknown} candidate
- * @returns {Promise<Request>}
- */
-async function requestFromSchema(candidate) {
-  /** @type {unknown} */
-  let schema;
-  try {
-    schema = JSON.parse(await readFile(requestSchemaPath(), "utf8"));
-  } catch (error) {
-    exitWithError(
-      "Unable to read the installed coordination request schema",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-  const issues = jsonSchemaIssues(schema, candidate);
-  if (issues.length > 0) {
-    exitWithError("Unable to build request from the coordination schema", issues);
-  }
-  return /** @type {Request} */ (candidate);
-}
-
 /** @returns {CoordinationState} */
 function emptyState() {
   return { versions: Object.create(null), edited: [], doneTaskId: null };
@@ -289,8 +155,24 @@ function taskId(required) {
 }
 
 /**
- * Outgoing bodies are built through the installed runtime schema generated
- * from router/schemas and are also checked during the server typecheck.
+ * @template TValue
+ * @param {() => TValue} build
+ * @returns {TValue}
+ */
+function buildRequest(build) {
+  try {
+    return build();
+  } catch (error) {
+    exitWithError(
+      "Unable to build request from the router schema",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/**
+ * Outgoing bodies are built with the schemas compiled from router/schemas
+ * and are also checked during the server typecheck.
  * @param {Request} body
  * @param {boolean} [requiresTask]
  * @returns {Promise<ProtocolResponse>}
@@ -307,6 +189,9 @@ async function send(body, requiresTask = false) {
   const headers = { "content-type": "application/json" };
   const authToken = process.env.COORDINATION_AUTH_TOKEN?.trim();
   if (authToken) headers.authorization = `Bearer ${authToken}`;
+  const envelope = buildRequest(
+    () => buildEnvelope(randomUUID(), agent, taskId(requiresTask), body),
+  );
 
   /** @type {globalThis.Response} */
   let response;
@@ -314,12 +199,7 @@ async function send(body, requiresTask = false) {
     response = await fetch(endpoint, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        msg_id: randomUUID(),
-        agent,
-        task_id: taskId(requiresTask),
-        body,
-      }),
+      body: JSON.stringify(envelope),
     });
   } catch (error) {
     exitWithError("Unable to reach the coordination server", error instanceof Error ? error.message : String(error));
@@ -358,9 +238,7 @@ function expectResponseKind(response, kind) {
 /** @param {string[]} args */
 async function listFiles(args) {
   if (args.length !== 0) exitWithError("Usage: agentctl list-files");
-  const request = await requestFromSchema(
-    /** @satisfies {Extract<Request, { kind: "list_files" }>} */ ({ kind: "list_files" }),
-  );
+  const request = buildRequest(buildListFilesRequest);
   const response = await send(request);
   if (response.kind !== "files" || !Array.isArray(response.files)) {
     exitWithError("List files returned an invalid response", response);
@@ -383,12 +261,7 @@ async function listFiles(args) {
 async function fetchFile(args) {
   if (args.length !== 1) exitWithError("Usage: agentctl fetch <path>");
   const requestedPath = normalizeProtocolPath(args[0] ?? "");
-  const request = await requestFromSchema(
-    /** @satisfies {Extract<Request, { kind: "fetch" }>} */ ({
-      kind: "fetch",
-      paths: [requestedPath],
-    }),
-  );
+  const request = buildRequest(() => buildFetchRequest([requestedPath]));
   const response = await send(request);
   if (
     response.kind !== "file" ||
@@ -429,7 +302,7 @@ async function commit(args) {
   if (state.edited.length === 0) {
     exitWithError("No edited files are tracked; use mark-edited after changing a file");
   }
-  /** @type {Extract<Request, { kind: "commit" }>["writes"]} */
+  /** @type {FileWrites} */
   const writes = [];
   for (const filePath of state.edited) {
     try {
@@ -458,13 +331,7 @@ async function commit(args) {
   const reads = Object.entries(state.versions)
     .filter(([filePath]) => !written.has(filePath))
     .map(([filePath, version]) => ({ path: filePath, version }));
-  const request = await requestFromSchema(
-    /** @satisfies {Extract<Request, { kind: "commit" }>} */ ({
-      kind: "commit",
-      writes,
-      reads,
-    }),
-  );
+  const request = buildRequest(() => buildCommitRequest(writes, reads));
   const response = expectResponseKind(await send(request), "committed");
   state.versions = Object.create(null);
   state.edited = [];
@@ -485,22 +352,15 @@ async function createTasks(args) {
     exitWithError("Unable to read task JSON", error instanceof Error ? error.message : String(error));
   }
   if (!Array.isArray(parsed)) exitWithError("Task JSON must contain an array");
-  const tasks = /** @type {Extract<Request, { kind: "create_tasks" }>["tasks"]} */ (parsed);
-  const request = await requestFromSchema(
-    /** @satisfies {Extract<Request, { kind: "create_tasks" }>} */ ({
-      kind: "create_tasks",
-      tasks,
-    }),
-  );
+  const tasks = /** @type {NewTasks} */ (parsed);
+  const request = buildRequest(() => buildCreateTasksRequest(tasks));
   return send(request);
 }
 
 /** @param {string[]} args */
 async function done(args) {
   if (args.length !== 0) exitWithError("Usage: agentctl done");
-  const request = await requestFromSchema(
-    /** @satisfies {Extract<Request, { kind: "done" }>} */ ({ kind: "done" }),
-  );
+  const request = buildRequest(buildDoneRequest);
   const response = await send(request, true);
   const state = await readState();
   state.doneTaskId = taskId(true);

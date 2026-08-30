@@ -1,5 +1,6 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type EventType = "request" | "response" | "error";
 
 export interface Agent {
   id: string;
@@ -62,8 +63,24 @@ export interface Task {
 
 export interface SystemEvent {
   seq: number;
-  type: "assigned" | "commit_ok" | "commit_rejected" | "escalated";
+  at: string;
+  type: EventType;
+  msg_id: string;
   agent: string;
-  task_id: string;
-  detail: string;
+  task_id: string | null;
+  payload?: {
+    ok?: boolean;
+    kind?: string;
+    body?: {
+      kind?: string;
+      paths?: string[];
+      writes?: Array<{ path: string; content: string; based_on: number | null }>;
+      reads?: Array<{ path: string; version: number }>;
+    };
+    files?: unknown[];
+    versions?: Record<string, number>;
+    code?: string;
+    moved?: Array<{ path: string; had: number; now: number }>;
+  };
+  error?: string;
 }

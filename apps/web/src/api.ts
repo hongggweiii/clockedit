@@ -80,5 +80,5 @@ export const api = {
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
 
   tasks: () => request<{ tasks: Task[] }>("/api/tasks"),
-  events: () => request<{ events: SystemEvent[] }>("/api/events"),
+  events: (after = 0) => request<{ events: SystemEvent[] }>("/api/events?after=" + after),
 };

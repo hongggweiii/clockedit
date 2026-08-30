@@ -386,14 +386,16 @@ body {
 .text-red { color: #c55353; }
 .text-green { color: #33906d; }
 
+/* STACKED SECTIONS LAYOUT (VERTICAL TOP-TO-BOTTOM) */
 .dashboard-grid {
-  display: grid;
-  grid-template-columns: 1.8fr 1.2fr;
-  gap: 20px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
 }
 
 .dashboard-section {
+  width: 100%;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -415,9 +417,10 @@ body {
   margin: 2px 0 0;
 }
 
-/* task table */
+/* TASK TABLE */
 .table-wrapper {
   overflow-x: auto;
+  width: 100%;
 }
 
 .task-table {
@@ -506,20 +509,50 @@ body {
   color: var(--muted);
 }
 
-/* audit stream */
+/* AUDIT STREAM FILTER BAR */
+.stream-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #f4f3ee;
+  border-bottom: 1px solid var(--line);
+}
+
+.stream-select {
+  min-width: 180px;
+  max-width: 260px;
+  height: 36px;
+  border: 1px solid #d9d7cf;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a4b44;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 150ms ease;
+}
+
+.stream-select:focus {
+  border-color: var(--purple);
+}
+
+/* AUDIT STREAM */
 .events-stream {
-  padding: 16px;
-  max-height: 540px;
+  padding: 18px 20px;
+  max-height: 480px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   background: #faf9f5;
 }
 
 .event-item {
   border-radius: 8px;
-  padding: 12px;
+  padding: 12px 16px;
   border-left: 4px solid #ccc;
   background: white;
   border-top: 1px solid #ebe9e1;
@@ -527,10 +560,9 @@ body {
   border-bottom: 1px solid #ebe9e1;
 }
 
-.event-assigned { border-left-color: #6954d9; }
-.event-commit_ok { border-left-color: #33906d; }
-.event-commit_rejected { border-left-color: #e09f3e; background: #fffcf5; }
-.event-escalated { border-left-color: #c55353; background: #fff8f7; }
+.event-request { border-left-color: #6954d9; }
+.event-response { border-left-color: #33906d; }
+.event-error { border-left-color: #c55353; background: #fff8f7; }
 
 .event-meta {
   display: flex;

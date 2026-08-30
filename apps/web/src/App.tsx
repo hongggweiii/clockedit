@@ -59,16 +59,55 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<SystemEvent[]>([]);
 
+  // Audit Stream Filters & Sorting
+  const [filterAgent, setFilterAgent] = useState<string>("all");
+  const [filterTask, setFilterTask] = useState<string>("all");
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const pollingRunIds = useRef(new Set<string>());
+  const lastSeqRef = useRef<number>(0);
   selectedIdRef.current = selectedId;
 
   const selected = useMemo(
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
   );
+
+  // Extract unique dynamic values for filtering
+  const uniqueAgents = useMemo(() => {
+    const set = new Set<string>();
+    events.forEach((ev) => {
+      if (ev.agent) set.add(ev.agent);
+    });
+    return Array.from(set);
+  }, [events]);
+
+  const uniqueTasks = useMemo(() => {
+    const set = new Set<string>();
+    events.forEach((ev) => {
+      if (ev.task_id) set.add(ev.task_id);
+    });
+    return Array.from(set);
+  }, [events]);
+
+  // Compute filtered & sorted events
+  const filteredEvents = useMemo(() => {
+    let result = events.filter((ev) => {
+      const matchAgent = filterAgent === "all" || ev.agent === filterAgent;
+      const matchTask = filterTask === "all" || ev.task_id === filterTask;
+      return matchAgent && matchTask;
+    });
+
+    if (sortOrder === "desc") {
+      result = result.slice().reverse();
+    } else {
+      result = result.slice();
+    }
+    return result;
+  }, [events, filterAgent, filterTask, sortOrder]);
 
   const refreshAgents = useCallback(async () => {
     try {
@@ -86,87 +125,117 @@ export default function App() {
 
   const refreshOrchestrator = useCallback(async () => {
     try {
-      const [tasksRes, eventsRes] = await Promise.allSettled([
-        api.tasks(),
-        api.events(),
-      ]);
-
-      if (tasksRes.status === "fulfilled" && tasksRes.value.tasks && tasksRes.value.tasks.length > 0) {
-        setTasks(tasksRes.value.tasks);
+      // 1. Fetch Task Matrix
+      const tasksRes = await api.tasks().catch(() => ({ tasks: [] }));
+      if (tasksRes.tasks && tasksRes.tasks.length > 0) {
+        setTasks(tasksRes.tasks);
       } else {
-        // mock data for UI demo
-        setTasks([
-          {
-            id: "task-001",
-            state: "done",
-            owner: "agent-parser",
-            depends_on: [],
-            writes: ["src/parser.py"],
-            strikes: 0,
-          },
-          {
-            id: "task-002",
-            state: "assigned",
-            owner: "agent-builder",
-            depends_on: ["task-001"],
-            writes: ["src/engine.ts", "package.json"],
-            strikes: 1,
-          },
-          {
-            id: "task-003",
-            state: "escalated",
-            owner: "agent-tester",
-            depends_on: ["task-002"],
-            writes: ["tests/suite.test.ts"],
-            strikes: 3,
-          },
-          {
-            id: "task-004",
-            state: "blocked",
-            owner: "agent-deployer",
-            depends_on: ["task-003"],
-            writes: ["deploy/manifest.yaml"],
-            strikes: 0,
-          },
-        ]);
+        // Fallback mock tasks for UI demonstration
+        setTasks((prev) =>
+          prev.length > 0
+            ? prev
+            : [
+                {
+                  id: "task-001",
+                  state: "done",
+                  owner: "agent-parser",
+                  depends_on: [],
+                  writes: ["src/parser.py"],
+                  strikes: 0,
+                },
+                {
+                  id: "task-002",
+                  state: "assigned",
+                  owner: "agent-builder",
+                  depends_on: ["task-001"],
+                  writes: ["src/engine.ts", "package.json"],
+                  strikes: 1,
+                },
+                {
+                  id: "task-003",
+                  state: "escalated",
+                  owner: "agent-tester",
+                  depends_on: ["task-002"],
+                  writes: ["tests/suite.test.ts"],
+                  strikes: 3,
+                },
+                {
+                  id: "task-004",
+                  state: "blocked",
+                  owner: "agent-deployer",
+                  depends_on: ["task-003"],
+                  writes: ["deploy/manifest.yaml"],
+                  strikes: 0,
+                },
+              ],
+        );
       }
 
-      if (eventsRes.status === "fulfilled" && eventsRes.value.events && eventsRes.value.events.length > 0) {
-        setEvents(eventsRes.value.events);
+      // 2. Fetch incremental events via ?after=seq
+      const eventsRes = await api.events(lastSeqRef.current).catch(() => ({ events: [] }));
+      if (eventsRes.events && eventsRes.events.length > 0) {
+        const nextEvents = eventsRes.events;
+        lastSeqRef.current = nextEvents[nextEvents.length - 1].seq;
+        setEvents((current) => [...current, ...nextEvents].slice(-100));
       } else {
-        // mock events for audit stream preview
-        setEvents([
-          {
-            seq: 1,
-            type: "assigned",
-            agent: "agent-parser",
-            task_id: "task-001",
-            detail: "Task dispatched via topo-sort DAG resolution.",
-          },
-          {
-            seq: 2,
-            type: "commit_ok",
-            agent: "agent-parser",
-            task_id: "task-001",
-            detail: "Successfully committed src/parser.py at version v1.",
-          },
-          {
-            seq: 3,
-            type: "commit_rejected",
-            agent: "agent-builder",
-            task_id: "task-002",
-            detail: "STALE file read detected on src/parser.py. Conflict retry 1/3 triggered.",
-          },
-          {
-            seq: 4,
-            type: "escalated",
-            agent: "agent-tester",
-            task_id: "task-003",
-            detail: "Exceeded max concurrency retries (3 strikes). Task frozen for human escalation.",
-          },
-        ]);
+        // Fallback mock events for initial preview
+        setEvents((prev) =>
+          prev.length > 0
+            ? prev
+            : [
+                {
+                  seq: 1,
+                  at: new Date().toISOString(),
+                  type: "request",
+                  msg_id: "m-1",
+                  agent: "agent-parser",
+                  task_id: "task-001",
+                  payload: {
+                    body: {
+                      kind: "fetch",
+                      paths: ["src/parser.py"],
+                    },
+                  },
+                },
+                {
+                  seq: 2,
+                  at: new Date().toISOString(),
+                  type: "response",
+                  msg_id: "m-2",
+                  agent: "agent-parser",
+                  task_id: "task-001",
+                  payload: {
+                    ok: true,
+                    kind: "commit_ok",
+                  },
+                },
+                {
+                  seq: 3,
+                  at: new Date().toISOString(),
+                  type: "response",
+                  msg_id: "m-3",
+                  agent: "agent-builder",
+                  task_id: "task-002",
+                  payload: {
+                    ok: false,
+                    code: "OCC_CONFLICT",
+                    kind: "commit_rejected",
+                  },
+                },
+                {
+                  seq: 4,
+                  at: new Date().toISOString(),
+                  type: "error",
+                  msg_id: "m-4",
+                  agent: "agent-tester",
+                  task_id: "task-003",
+                  error: "Max retries (3 strikes) exceeded. Task escalated.",
+                },
+              ],
+        );
       }
     } catch {
+      // Graceful error capture
     }
   }, []);
 
@@ -198,7 +267,7 @@ export default function App() {
 
     const timer = setInterval(() => {
       if (mountedRef.current) void refreshOrchestrator();
-    }, 1500);
+    }, 1000);
 
     return () => {
       mountedRef.current = false;
@@ -427,7 +496,7 @@ export default function App() {
           </div>
         </div>
 
-        {/*View Switcher*/}
+        {/* View Switcher */}
         <div className="view-switcher">
           <button
             className={`tab-button ${activeTab === "orchestrator" ? "active" : ""}`}
@@ -624,7 +693,7 @@ export default function App() {
                 </div>
               </section>
 
-              {/* Real-Time OCC Event Stream */}
+              {/* Real-Time OCC Event Stream with Filtering & Sorting */}
               <section className="dashboard-section events-stream-panel">
                 <div className="section-header">
                   <div>
@@ -633,32 +702,85 @@ export default function App() {
                   <span className="pulse" />
                 </div>
 
+                {/* Filter / Sort Control Bar */}
+                <div className="stream-filter-bar">
+                  <select
+                    className="stream-select"
+                    value={filterAgent}
+                    onChange={(e) => setFilterAgent(e.target.value)}
+                  >
+                    <option value="all">All Agents</option>
+                    {uniqueAgents.map((agent) => (
+                      <option key={agent} value={agent}>
+                        Agent: {agent}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="stream-select"
+                    value={filterTask}
+                    onChange={(e) => setFilterTask(e.target.value)}
+                  >
+                    <option value="all">All Tasks</option>
+                    {uniqueTasks.map((taskId) => (
+                      <option key={taskId} value={taskId}>
+                        Task: {taskId}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="stream-select"
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as "desc" | "asc")}
+                  >
+                    <option value="desc">Newest First</option>
+                    <option value="asc">Oldest First</option>
+                  </select>
+                </div>
+
                 <div className="events-stream">
-                  {events.length === 0 ? (
-                    <div className="empty-events">Awaiting coordinator events…</div>
+                  {filteredEvents.length === 0 ? (
+                    <div className="empty-events">No events match current filter.</div>
                   ) : (
-                    events
-                      .slice()
-                      .reverse()
-                      .map((ev) => (
+                    filteredEvents.map((ev) => {
+                      const detailSummary =
+                        ev.error ??
+                        ev.payload?.body?.kind ??
+                        ev.payload?.kind ??
+                        (ev.payload?.ok ? "Operation Succeeded" : "Event Dispatched");
+
+                      return (
                         <div key={ev.seq} className={`event-item event-${ev.type}`}>
                           <div className="event-meta">
                             <span>
                               #{ev.seq} · {ev.agent}
                             </span>
-                            <span className="event-task-tag">{ev.task_id}</span>
+                            <span className="event-task-tag">{ev.task_id || "no-task"}</span>
                           </div>
-                          <strong className="event-type">{ev.type.replace("_", " ")}</strong>
-                          <p className="event-detail">{ev.detail}</p>
+                          <strong className="event-type">{ev.type}</strong>
+                          <p className="event-detail">
+                            {detailSummary}
+                            {ev.payload?.body?.paths && ` (${ev.payload.body.paths.join(", ")})`}
+                            {ev.payload?.code && ` [${ev.payload.code}]`}
+                          </p>
+                          <span
+                            className="event-time"
+                            style={{ fontSize: "9px", color: "var(--muted)" }}
+                          >
+                            {formatTime(ev.at)}
+                          </span>
                         </div>
-                      ))
+                      );
+                    })
                   )}
                 </div>
               </section>
             </div>
           </div>
         ) : (
-          /*  PLAYGROUND / WORKSPACE VIEW  */
+          /* ==================== PLAYGROUND / WORKSPACE VIEW ==================== */
           selected ? (
             <>
               <header className="agent-header">
@@ -870,7 +992,7 @@ export default function App() {
         )}
       </main>
 
-      {/* creating agent */}
+      {/* Modal for creating Agent */}
       {showCreate && (
         <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}>
           <form

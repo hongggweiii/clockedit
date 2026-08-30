@@ -1,9 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { z } from "zod";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { requestSchema } from "../router/schemas/router.schemas.js";
 import type { RunnerRequest } from "../types.js";
 import {
   assertCoordinationDone,
@@ -44,11 +43,37 @@ describe("Agent coordination tools", () => {
     temporaryDirectories.push(workspace);
     const installed = await installAgentTools(workspace);
     expect(installed).toBe(path.join(workspace, ".coordination", "agentctl.mjs"));
-    expect(await readFile(installed, "utf8")).toContain("COORDINATION_BASE_URL");
-    expect(JSON.parse(await readFile(
+    expect(await readFile(installed, "utf8")).toContain(
+      "./runtime/agent-harness/agentctl.mjs",
+    );
+    expect(await readFile(
+      path.join(
+        workspace,
+        ".coordination",
+        "runtime",
+        "agent-harness",
+        "agentctl.mjs",
+      ),
+      "utf8",
+    )).toContain("COORDINATION_BASE_URL");
+    await expect(readFile(
       path.join(workspace, ".coordination", "request-schema.json"),
       "utf8",
-    ))).toEqual(z.toJSONSchema(requestSchema));
+    )).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps protocol request bodies out of the command client", async () => {
+    const source = await readFile(
+      fileURLToPath(new URL("./agentctl.mjs", import.meta.url)),
+      "utf8",
+    );
+    expect(source).toContain("buildListFilesRequest");
+    expect(source).toContain("buildEnvelope");
+    expect(source).not.toContain("request-schema.json");
+    expect(source).not.toContain("jsonSchemaIssues");
+    expect(source).not.toMatch(
+      /kind:\s*["'](?:list_files|fetch|commit|create_tasks|done)["']/,
+    );
   });
 
   it("provides scoped context without placing secrets in container arguments", () => {

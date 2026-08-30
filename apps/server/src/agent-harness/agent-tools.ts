@@ -1,14 +1,22 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
-import { requestSchema } from "../router/schemas/router.schemas.js";
 import type { RunnerRequest } from "../types.js";
 
 const toolDirectoryName = ".coordination";
 const toolFileName = "agentctl.mjs";
-const requestSchemaFileName = "request-schema.json";
-const toolSource = fileURLToPath(new URL("./agentctl.mjs", import.meta.url));
+const currentModule = fileURLToPath(import.meta.url);
+const launcherSource = fileURLToPath(
+  new URL("./agentctl-launcher.mjs", import.meta.url),
+);
+const runtimeSource = fileURLToPath(
+  currentModule.endsWith(".ts")
+    ? new URL("../../dist/agent-runtime", import.meta.url)
+    : new URL("../agent-runtime", import.meta.url),
+);
+const require = createRequire(import.meta.url);
+const zodSource = path.dirname(require.resolve("zod/package.json"));
 
 export const coordinationWorkflowInstructions = [
   "- Use `node .coordination/agentctl.mjs list-files` whenever you need to discover shared files to read or edit.",
@@ -24,14 +32,16 @@ export async function installAgentTools(workspacePath: string): Promise<string> 
   const toolDirectory = path.join(workspacePath, toolDirectoryName);
   await mkdir(toolDirectory, { recursive: true });
   const destination = path.join(toolDirectory, toolFileName);
+  const runtimeDestination = path.join(toolDirectory, "runtime");
   await Promise.all([
-    copyFile(toolSource, destination),
-    writeFile(
-      path.join(toolDirectory, requestSchemaFileName),
-      JSON.stringify(z.toJSONSchema(requestSchema), null, 2) + "\n",
-      "utf8",
-    ),
+    copyFile(launcherSource, destination),
+    cp(runtimeSource, runtimeDestination, { recursive: true }),
   ]);
+  await cp(
+    zodSource,
+    path.join(runtimeDestination, "node_modules", "zod"),
+    { recursive: true },
+  );
   return destination;
 }
 

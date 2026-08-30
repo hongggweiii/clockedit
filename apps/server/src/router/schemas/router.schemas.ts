@@ -44,12 +44,6 @@ export const envelopeSchema = z.strictObject({
 
 const movedFileSchema = z.strictObject({ path: pathSchema, had: fileVersionSchema, now: fileVersionSchema });
 
-const fileListResponseSchema = z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path) });
-const fileContentsResponseSchema = z.strictObject({
-  ok: z.literal(true), kind: z.literal("files"),
-  files: uniquePaths(z.strictObject({ path: pathSchema, version: fileVersionSchema, content: z.string() }), (file) => file.path),
-});
-
 export const responseSchema = z.union([
   z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096) }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("file"), path: pathSchema, version: fileVersionSchema, content: z.string() }),

@@ -241,6 +241,7 @@ docker compose config
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Coordination message protocol](docs/MESSAGE_PROTOCOL.md)
+- [Agent coordination harness](docs/AGENT_HARNESS.md)
 - [Local POC](docs/LOCAL_POC.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)

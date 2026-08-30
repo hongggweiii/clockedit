@@ -1,12 +1,19 @@
 import { z } from "zod";
-import { newTaskSchema, taskSchema } from "./task.schemas.js";
+import { newTaskSchema } from "./task.schemas.js";
 import { fileRefSchema, fileWriteSchema, pathSchema, uniquePaths } from "./file.schemas.js";
 import { taskIdSchema } from "./task.schemas.js";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const fileVersionSchema = z.number().int().nonnegative();
 
-export const fetchRequestSchema = z.strictObject({ kind: z.literal("fetch"), paths: uniquePaths(pathSchema, (path) => path).min(1) });
+export const fetchRequestSchema = z.strictObject({
+  kind: z.literal("fetch"),
+  paths: uniquePaths(pathSchema, (path) => path).min(1),
+});
+
+export const listFilesRequestSchema = z.strictObject({
+  kind: z.literal("list_files"),
+});
 
 export const commitRequestSchema = z.strictObject({
   kind: z.literal("commit"),
@@ -19,8 +26,11 @@ export const doneRequestSchema = z.strictObject({ kind: z.literal("done")});
 export const createTasksRequestSchema = z.strictObject({ kind: z.literal("create_tasks"), tasks: z.array(newTaskSchema).min(1).max(256) });
 
 export const requestSchema = z.discriminatedUnion("kind", [
-  fetchRequestSchema, commitRequestSchema,
-  doneRequestSchema, createTasksRequestSchema,
+  listFilesRequestSchema,
+  fetchRequestSchema,
+  commitRequestSchema,
+  doneRequestSchema,
+  createTasksRequestSchema,
 ]);
 
 const taskScopedRequestKinds = new Set(["done"]);
@@ -35,6 +45,7 @@ export const envelopeSchema = z.strictObject({
 const movedFileSchema = z.strictObject({ path: pathSchema, had: fileVersionSchema, now: fileVersionSchema });
 
 export const responseSchema = z.union([
+  z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096) }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("file"), path: pathSchema, version: fileVersionSchema, content: z.string() }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("committed") }),
   z.strictObject({ ok: z.literal(false), code: z.literal("NOT_FOUND"), path: pathSchema }),

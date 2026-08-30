@@ -79,6 +79,14 @@ export interface RunnerRequest {
   workspacePath: string;
   prompt: string;
   threadId: string | null;
+  coordination?: CoordinationContext;
+}
+
+export interface CoordinationContext {
+  baseUrl: string;
+  projectId: string;
+  taskId: string | null;
+  authToken?: string;
 }
 
 export interface AgentRunner {

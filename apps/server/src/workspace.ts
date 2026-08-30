@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { coordinationWorkflowInstructions } from "./agent-harness/agent-tools.js";
 import type { Agent } from "./types.js";
 
 export class WorkspaceManager {
@@ -19,7 +20,7 @@ export class WorkspaceManager {
     await this.writeInstructions(agent);
     await writeFile(
       path.join(agent.workspacePath, ".gitignore"),
-      [".codex/", "node_modules/", "dist/", ".env", "*.log", ""].join("\n"),
+      [".codex/", ".coordination/", "node_modules/", "dist/", ".env", "*.log", ""].join("\n"),
       "utf8",
     );
     await writeFile(
@@ -53,6 +54,10 @@ export class WorkspaceManager {
       "- Preserve existing user files and avoid destructive operations.",
       "- Build and test changes when practical.",
       "- Never print environment variables or credentials.",
+      "- When coordination is enabled, use `node .coordination/agentctl.mjs help` to list the shared-file tools.",
+      ...coordinationWorkflowInstructions.map((instruction) =>
+        "- When coordination is enabled, " + instruction.slice(2),
+      ),
       "",
       "This file is regenerated when the Agent configuration is updated.",
       "",

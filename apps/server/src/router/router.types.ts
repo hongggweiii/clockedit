@@ -5,11 +5,13 @@ import {
   doneRequestSchema,
   envelopeSchema,
   fetchRequestSchema,
+  listFilesRequestSchema,
   requestSchema,
   responseSchema,
 } from "./schemas/router.schemas.js";
 
 export type FetchRequest = z.infer<typeof fetchRequestSchema>;
+export type ListFilesRequest = z.infer<typeof listFilesRequestSchema>;
 export type CommitRequest = z.infer<typeof commitRequestSchema>;
 export type CreateTasksRequest = z.infer<typeof createTasksRequestSchema>;
 export type DoneRequest = z.infer<typeof doneRequestSchema>;

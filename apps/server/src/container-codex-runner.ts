@@ -10,6 +10,7 @@ import type {
   RunnerResult,
 } from "./types.js";
 import {
+  assertCoordinationDone,
   coordinationContainerEnvArgs,
   coordinationEnvironment,
   installAgentTools,
@@ -235,6 +236,7 @@ export class ContainerCodexRunner implements AgentRunner {
       }
       const output = parsed.messages.at(-1)?.trim();
       if (!output) throw new Error("Codex completed without an agent message");
+      await assertCoordinationDone(request);
       return { output, threadId: parsed.threadId, usage: parsed.usage };
     } finally {
       clearTimeout(timeout);

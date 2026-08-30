@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { coordinationWorkflowInstructions } from "./agent-harness/agent-tools.js";
 import type { Agent } from "./types.js";
 
 export class WorkspaceManager {
@@ -54,6 +55,9 @@ export class WorkspaceManager {
       "- Build and test changes when practical.",
       "- Never print environment variables or credentials.",
       "- When coordination is enabled, use `node .coordination/agentctl.mjs help` to list the shared-file tools.",
+      ...coordinationWorkflowInstructions.map((instruction) =>
+        "- When coordination is enabled, " + instruction.slice(2),
+      ),
       "",
       "This file is regenerated when the Agent configuration is updated.",
       "",

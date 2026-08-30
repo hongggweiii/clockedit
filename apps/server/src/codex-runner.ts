@@ -10,6 +10,7 @@ import type {
   RunnerResult,
 } from "./types.js";
 import {
+  assertCoordinationDone,
   coordinationEnvironment,
   installAgentTools,
   promptWithCoordinationTools,
@@ -222,6 +223,7 @@ export class CodexRunner implements AgentRunner {
       if (!output) {
         throw new Error("Codex completed without an agent message");
       }
+      await assertCoordinationDone(request);
       return {
         output,
         threadId: parsed.threadId,

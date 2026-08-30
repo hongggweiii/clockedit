@@ -12,7 +12,7 @@ export { validateDag, topoSort, unblockedIds } from "./dag.js";
 export type { DagValidationResult, DagValidationError } from "./dag.js";
 export { plan } from "./scheduler.js";
 export type { SchedulerPlan } from "./scheduler.js";
-export { evaluateCommit, MAX_STRIKES } from "./occ.js";
+export { evaluateCommit } from "./occ.js";
 export type { OccOutcome } from "./occ.js";
 export { writesOverlap, conflictsWithAny } from "./intent-graph.js";
 export type { InternalTask, NewTask, Task, TaskState } from "./task.types.js";

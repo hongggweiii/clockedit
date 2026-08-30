@@ -81,13 +81,13 @@ describe("Coordinator (push model, real FileStore)", () => {
     ]);
     await waitUntil(() => pushAdapter.sent.length === 1);
 
-    const response = await coordinator.commit("a1", "t1", {
+    const response = await coordinator.onCommit("a1", "t1", {
       kind: "commit",
       reads: [],
       writes: [{ path: "shared.ts", content: "hello", based_on: null }],
     });
     expect(response.ok).toBe(true);
-    await coordinator.done("a1", "t1", { kind: "done" });
+    await coordinator.onDone("a1", "t1", { kind: "done" });
 
     await waitUntil(() => pushAdapter.sent.length === 2);
     expect(pushAdapter.sent[1]).toEqual({ taskId: "t2", ownerId: "a2" });
@@ -100,7 +100,7 @@ describe("Coordinator (push model, real FileStore)", () => {
     await coordinator.submitTasks([newTask({ id: "t1", owner: "a1", writes: ["w.ts"] })]);
     await waitUntil(() => pushAdapter.sent.length === 1);
 
-    const response = await coordinator.commit("a1", "t1", {
+    const response = await coordinator.onCommit("a1", "t1", {
       kind: "commit",
       reads: [],
       writes: [{ path: "w.ts", content: "x", based_on: null }],
@@ -116,27 +116,29 @@ describe("Coordinator (push model, real FileStore)", () => {
     expect(pushAdapter.sent).toHaveLength(1);
   });
 
-  it("escalates after MAX_STRIKES conflicts", async () => {
+  it("keeps returning STALE indefinitely on repeated conflicts (no escalation)", async () => {
     await fileStore.commit("seeder", "seed", [{ path: "w.ts", content: "seed", based_on: null }]);
     await coordinator.submitTasks([newTask({ id: "t1", owner: "a1", writes: ["w.ts"] })]);
     await waitUntil(() => pushAdapter.sent.length === 1);
 
-    for (let i = 0; i < 3; i++) {
-      await coordinator.commit("a1", "t1", {
+    for (let i = 0; i < 10; i++) {
+      const response = await coordinator.onCommit("a1", "t1", {
         kind: "commit",
         reads: [],
         writes: [{ path: "w.ts", content: "x", based_on: null }],
       });
+      expect(response.ok).toBe(false);
     }
-    expect(taskStore.get("t1")!.state).toBe("escalated");
+    // Task remains assigned; strikes reflect attempts; no escalation.
+    expect(taskStore.get("t1")!.state).toBe("assigned");
+    expect(taskStore.get("t1")!.strikes).toBe(10);
     expect(pushAdapter.sent).toHaveLength(1);
   });
 
-  it("fetch returns {found, missing} and tracks per-agent reads", async () => {
+  it("onFetch returns found files (Router handles missing → NOT_FOUND)", async () => {
     await fileStore.commit("seeder", "seed", [{ path: "r.ts", content: "hello", based_on: null }]);
-    const result = await coordinator.fetch("a1", { kind: "fetch", paths: ["r.ts", "ghost.ts"] });
-    expect(result.found).toEqual([{ path: "r.ts", version: 1, content: "hello" }]);
-    expect(result.missing).toEqual(["ghost.ts"]);
+    const files = await coordinator.onFetch("a1", { kind: "fetch", paths: ["r.ts", "ghost.ts"] });
+    expect(files).toEqual([{ path: "r.ts", version: 1, content: "hello" }]);
   });
 
   it("listFiles enumerates the FileStore", async () => {
@@ -166,14 +168,14 @@ describe("Coordinator (push model, real FileStore)", () => {
     await coordinator.submitTasks([newTask({ id: "t2", owner: "a2" })]);
     await waitUntil(() => taskStore.get("t2")!.state === "assigned");
     await expect(
-      coordinator.commit("a1", "t2", { kind: "commit", reads: [], writes: [{ path: "x.ts", content: "", based_on: null }] }),
+      coordinator.onCommit("a1", "t2", { kind: "commit", reads: [], writes: [{ path: "x.ts", content: "", based_on: null }] }),
     ).rejects.toThrow(/not the owner/);
   });
 
   it("createTasks appends agent-proposed tasks and returns their ids", async () => {
     await coordinator.submitTasks([newTask({ id: "t1", owner: "a1" })]);
     await waitUntil(() => taskStore.get("t1")!.state === "assigned");
-    const created = await coordinator.createTasks("a1", {
+    const created = await coordinator.onCreateTasks("a1", {
       kind: "create_tasks",
       tasks: [{ id: "child", detail: "child of t1", owner: "a2", depends_on: ["t1"], writes: [] }],
     });

@@ -2,13 +2,9 @@ import type { FileRef, FileWrite, MovedFile } from "../storage/file-store.types.
 import type { FileStore } from "../storage/file-store.js";
 import type { InternalTask } from "./task.types.js";
 
-// Matches strikes cap in shared task schema (0..3).
-export const MAX_STRIKES = 3;
-
 export type OccOutcome =
   | { kind: "committed"; versions: Record<string, number> }
-  | { kind: "retry"; strikes: number; moved: MovedFile[] }
-  | { kind: "exhausted"; strikes: number; moved: MovedFile[] };
+  | { kind: "retry"; strikes: number; moved: MovedFile[] };
 
 export interface OccInput {
   task: InternalTask;
@@ -25,7 +21,8 @@ export interface OccInput {
  * interprets the CommitResult into a state-machine outcome:
  *   - committed → task advances toward `done`
  *   - retry     → task stays `assigned`; agent must re-fetch + re-commit
- *   - exhausted → task moves to `escalated` (bounded by MAX_STRIKES)
+ *
+ * Retries are unbounded. The agent (not the server) decides when to give up.
  */
 export async function evaluateCommit({
   task,
@@ -38,9 +35,5 @@ export async function evaluateCommit({
   if (result.ok) {
     return { kind: "committed", versions: result.versions };
   }
-  const nextStrikes = task.strikes + 1;
-  if (nextStrikes >= MAX_STRIKES) {
-    return { kind: "exhausted", strikes: nextStrikes, moved: result.moved };
-  }
-  return { kind: "retry", strikes: nextStrikes, moved: result.moved };
+  return { kind: "retry", strikes: task.strikes + 1, moved: result.moved };
 }

@@ -38,6 +38,12 @@ const envSchema = z.object({
     .max(128)
     .regex(/^[A-Za-z0-9._~-]*$/, "APP_AUTH_TOKEN must use URL-safe characters")
     .optional(),
+  TASK_SERVER_AUTH_TOKEN: z
+    .string()
+    .trim()
+    .max(128)
+    .regex(/^[A-Za-z0-9._~-]*$/, "TASK_SERVER_AUTH_TOKEN must use URL-safe characters")
+    .optional(),
   ARK_API_KEY: z.string().optional(),
   ARK_MODEL: z.string().optional(),
   ARK_BASE_URL: z
@@ -84,6 +90,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     containerUser: env.CONTAINER_USER?.trim() || defaultContainerUser,
     runtimeInstanceId: env.RUNTIME_INSTANCE_ID,
     authToken,
+    taskServerAuthToken: env.TASK_SERVER_AUTH_TOKEN?.trim() ?? "",
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),

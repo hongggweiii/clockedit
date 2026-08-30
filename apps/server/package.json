@@ -5,9 +5,12 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "predev": "npm run build:agentctl",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:agentctl",
+    "build:agentctl": "tsc -p tsconfig.agentctl.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build:agentctl",
     "test": "vitest run",
     "start": "node dist/index.js"
   },

@@ -54,10 +54,13 @@ describe("agent coordination lifecycle", () => {
       onDone: async () => undefined,
     });
     const runner = new RecordingRunner();
+    const store = new JsonStore(path.join(root, "data", "launchpad.json"));
+    const workspaceManager = new WorkspaceManager(path.join(root, "workspaces"));
     let service: AgentService | undefined;
     const taskServer = await createTaskServerApp(config, router, (agentId) =>
       service?.getAgentProfile(agentId) ?? null,
     );
+    let replacementTaskServer: typeof taskServer | undefined;
 
     try {
       await taskServer.listen({ host: "127.0.0.1", port: 0 });
@@ -66,8 +69,8 @@ describe("agent coordination lifecycle", () => {
       const coordinationBaseUrl = `http://127.0.0.1:${address.port}`;
       service = new AgentService(
         config,
-        new JsonStore(path.join(root, "data", "launchpad.json")),
-        new WorkspaceManager(path.join(root, "workspaces")),
+        store,
+        workspaceManager,
         runner,
         router,
         { baseUrl: coordinationBaseUrl, projectId: "integration", taskId: null, authToken: "task-secret" },
@@ -104,16 +107,42 @@ describe("agent coordination lifecycle", () => {
         files: [{ path: "shared/spec.md", version: 1, content: "# shared spec\n" }],
       });
 
+      await service.stopAgent(agent.id);
+      await store.mutate((database) => {
+        const persisted = database.agents.find((item) => item.id === agent.id);
+        if (persisted) persisted.status = "ready";
+      });
+      const restartedService = new AgentService(
+        config,
+        store,
+        workspaceManager,
+        runner,
+        router,
+        { baseUrl: coordinationBaseUrl, projectId: "integration", taskId: null, authToken: "task-secret" },
+      );
+      await restartedService.initialize();
+      await restartedService.connectInitializedAgents();
+      expect(router.hasAgent(agent.id)).toBe(true);
+
+      await taskServer.close();
+      await expect.poll(() => router.hasAgent(agent.id)).toBe(false);
+      replacementTaskServer = await createTaskServerApp(config, router, (agentId) =>
+        service?.getAgentProfile(agentId) ?? null,
+      );
+      await replacementTaskServer.listen({ host: "127.0.0.1", port: address.port });
+      await expect.poll(() => router.hasAgent(agent.id)).toBe(true);
+
       await router.dispatch(agent.id, { ok: true, kind: "tasks", task_ids: ["task-1"] });
-      await expect.poll(() => service?.getRuns(agent.id).length).toBe(1);
-      await expect.poll(() => service?.getRuns(agent.id)[0]?.status).toBe("completed");
+      await expect.poll(() => restartedService.getRuns(agent.id).length).toBe(1);
+      await expect.poll(() => restartedService.getRuns(agent.id)[0]?.status).toBe("completed");
       expect(runner.requests).toHaveLength(1);
       expect(runner.requests[0]?.prompt).toContain('"task_ids":["task-1"]');
-      expect(service.getMessages(agent.id).at(-1)?.role).toBe("assistant");
+      expect(restartedService.getMessages(agent.id).at(-1)?.role).toBe("assistant");
     } finally {
       if (service) {
         for (const agent of service.listAgents()) await service.deleteAgent(agent.id);
       }
+      await replacementTaskServer?.close();
       await taskServer.close();
       await rm(root, { recursive: true, force: true });
     }

@@ -36,7 +36,11 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner(), router?: Router): Promise<AgentService> {
+async function makeService(
+  runner: AgentRunner = new FakeRunner(),
+  router?: Router,
+  coordination?: { baseUrl: string; projectId: string; taskId: string | null; authToken?: string },
+): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -53,6 +57,7 @@ async function makeService(runner: AgentRunner = new FakeRunner(), router?: Rout
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
     router,
+    coordination,
   );
   await service.initialize();
   return service;
@@ -79,6 +84,21 @@ describe("Agent lifecycle", () => {
     expect(service.getAgentProfile(agent.id)).toEqual({ id: agent.id, description: "" });
     await service.deleteAgent(agent.id);
     expect(service.getAgentProfile(agent.id)).toBeNull();
+  });
+
+  it("rolls back the Agent when its initial SSE connection cannot be established", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(new FakeRunner(), router, {
+      baseUrl: "http://127.0.0.1:1",
+      projectId: "test",
+      taskId: null,
+    });
+
+    await expect(service.createAgent({ name: "Unavailable" })).rejects.toMatchObject({
+      statusCode: 503,
+      message: expect.stringContaining("SSE connection could not be established"),
+    });
+    expect(service.listAgents()).toEqual([]);
   });
 
   it("can initialize repeatedly without changing agent profiles", async () => {

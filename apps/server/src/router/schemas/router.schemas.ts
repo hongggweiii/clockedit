@@ -33,7 +33,7 @@ export const requestSchema = z.discriminatedUnion("kind", [
   createTasksRequestSchema,
 ]);
 
-const taskScopedRequestKinds = new Set(["done"]);
+const taskScopedRequestKinds = new Set(["commit", "done"]);
 export const envelopeSchema = z.strictObject({
   msg_id: z.uuid(), agent: nonEmptyStringSchema, task_id: taskIdSchema.nullable(), body: requestSchema,
 }).superRefine((envelope, context) => {
@@ -47,7 +47,9 @@ const movedFileSchema = z.strictObject({ path: pathSchema, had: fileVersionSchem
 export const responseSchema = z.union([
   z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096) }),
   z.strictObject({ ok: z.literal(true), kind: z.literal("file"), path: pathSchema, version: fileVersionSchema, content: z.string() }),
-  z.strictObject({ ok: z.literal(true), kind: z.literal("committed") }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal("committed"), new_versions: z.record(z.string(), fileVersionSchema).optional() }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal("done") }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal("tasks"), task_ids: z.array(taskIdSchema) }),
   z.strictObject({ ok: z.literal(false), code: z.literal("NOT_FOUND"), path: pathSchema }),
   z.strictObject({ ok: z.literal(false), code: z.literal("STALE"), moved: z.array(movedFileSchema).min(1) }),
 ]);

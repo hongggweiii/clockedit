@@ -5,7 +5,7 @@ import { createTaskServerApp } from "./app.js";
 
 describe("private task-server HTTP boundary", () => {
   it("does not expose messages without the server token", async () => {
-    const router = new Router({ fetch: vi.fn(), commit: vi.fn(), done: vi.fn() });
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
     const app = await createTaskServerApp(
       loadConfig({ NODE_ENV: "test", TASK_SERVER_AUTH_TOKEN: "task-secret" }),
       router,

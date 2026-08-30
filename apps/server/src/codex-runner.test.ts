@@ -52,7 +52,7 @@ describe("Codex runner protocol", () => {
       },
       "workspace-write",
     );
-    expect(args.at(-1)).toContain("node .coordination/agentctl.mjs fetch <path>");
+    expect(args.at(-1)).toContain("node .coordination/agentctl.mjs fetch <path> [path ...]");
     expect(args.at(-1)).toContain("build the page");
   });
 

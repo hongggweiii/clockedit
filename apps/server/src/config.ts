@@ -1,10 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 
 const envSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  TASK_SERVER_HOST: z.string().default("127.0.0.1"),
+  TASK_SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+  TASK_SERVER_BASE_URL: z.string().url().default("http://127.0.0.1:4000"),
   LOG_LEVEL: z.string().default("info"),
   APP_DATA_DIR: z.string().default(path.resolve(".data")),
   AGENT_WORKSPACE_ROOT: z.string().default(path.resolve("workspaces")),
@@ -73,6 +77,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
   return {
     host: env.HOST,
     port: env.PORT,
+    taskServerHost: env.TASK_SERVER_HOST,
+    taskServerPort: env.TASK_SERVER_PORT,
+    taskServerBaseUrl: env.TASK_SERVER_BASE_URL.replace(/\/+$/, ""),
     logLevel: env.LOG_LEVEL,
     dataDirectory: path.resolve(env.APP_DATA_DIR),
     workspaceRoot: path.resolve(env.AGENT_WORKSPACE_ROOT),
@@ -90,7 +97,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     containerUser: env.CONTAINER_USER?.trim() || defaultContainerUser,
     runtimeInstanceId: env.RUNTIME_INSTANCE_ID,
     authToken,
-    taskServerAuthToken: env.TASK_SERVER_AUTH_TOKEN?.trim() ?? "",
+    taskServerAuthToken: env.TASK_SERVER_AUTH_TOKEN?.trim() || randomUUID(),
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),

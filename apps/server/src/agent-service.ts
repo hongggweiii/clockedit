@@ -7,11 +7,13 @@ import type {
   Agent,
   AgentRun,
   AgentRunner,
+  CoordinationContext,
   CreateAgentInput,
   Message,
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import type { Router } from "./router/router.js";
 
 const now = () => new Date().toISOString();
 
@@ -24,6 +26,8 @@ export class AgentService {
     private readonly store: JsonStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
+    private readonly router?: Router,
+    private readonly coordination?: CoordinationContext,
   ) {}
 
   async initialize(): Promise<void> {
@@ -44,6 +48,7 @@ export class AgentService {
         }
       }
     });
+    for (const agent of this.store.snapshot().agents) this.registerAgent(agent.id, agent.description);
   }
 
   listAgents(): Agent[] {
@@ -77,6 +82,7 @@ export class AgentService {
     };
     await this.workspaces.create(agent);
     await this.store.mutate((database) => database.agents.push(agent));
+    this.registerAgent(agent.id, agent.description);
     return agent;
   }
 
@@ -101,6 +107,7 @@ export class AgentService {
       return structuredClone(agent);
     });
     await this.workspaces.writeInstructions(updated);
+    this.router?.updateAgentProfile(id, { description: updated.description });
     return updated;
   }
 
@@ -113,7 +120,13 @@ export class AgentService {
       database.messages = database.messages.filter((item) => item.agentId !== id);
       database.runs = database.runs.filter((item) => item.agentId !== id);
     });
+    this.router?.unregisterAgent(id);
     return { archivedWorkspace };
+  }
+
+  private registerAgent(agentId: string, description = ""): void {
+    if (!this.router || this.router.hasAgent(agentId)) return;
+    this.router?.registerAgent(agentId, { send: async () => undefined }, { description });
   }
 
   async startAgent(id: string): Promise<Agent> {
@@ -249,6 +262,7 @@ export class AgentService {
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
+        ...(this.coordination ? { coordination: this.coordination } : {}),
       });
       const completedAt = now();
       await this.store.mutate((database) => {

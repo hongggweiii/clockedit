@@ -34,22 +34,32 @@ describe("agentctl", () => {
       if (body.kind === "list_files") {
         result = {
           ok: true,
-          kind: "files",
+          kind: "file_refs",
           files: [
             { path: "contracts/order-api.json", version: 2 },
             { path: "src/App.tsx", version: 3 },
           ],
         };
-      } else if (body.kind === "fetch") {
-        const requestedPath = body.paths[0];
+      } else if (body.kind === "list_agents") {
         result = {
           ok: true,
-          kind: "file",
-          path: requestedPath,
-          version: requestedPath?.startsWith("contracts/") ? 2 : 3,
-          content: requestedPath?.startsWith("contracts/")
-            ? '{"field":"order_id"}'
-            : "old",
+          kind: "agent_profiles",
+          agents: [
+            { id: "backend", description: "Owns APIs" },
+            { id: "frontend", description: "" },
+          ],
+        };
+      } else if (body.kind === "fetch") {
+        result = {
+          ok: true,
+          kind: "files",
+          files: body.paths.map((requestedPath) => ({
+            path: requestedPath,
+            version: requestedPath.startsWith("contracts/") ? 2 : 3,
+            content: requestedPath.startsWith("contracts/")
+              ? '{"field":"order_id"}'
+              : "old",
+          })),
         };
       } else {
         result = { ok: true, kind: "committed" };
@@ -84,8 +94,15 @@ describe("agentctl", () => {
   }
 
   it("fetches dependencies and commits every tracked edited file", async () => {
-    await run("fetch", "contracts/order-api.json");
-    await run("fetch", "src/App.tsx");
+    await run("fetch", "contracts/order-api.json", "src/App.tsx");
+    expect(received[0]?.body).toEqual({
+      kind: "fetch",
+      paths: ["contracts/order-api.json", "src/App.tsx"],
+    });
+    expect(await readFile(path.join(workspace, "contracts/order-api.json"), "utf8"))
+      .toBe('{"field":"order_id"}');
+    expect(await readFile(path.join(workspace, "src/App.tsx"), "utf8"))
+      .toBe("old");
     await writeFile(path.join(workspace, "src", "App.tsx"), "updated", "utf8");
     await writeFile(path.join(workspace, "new.ts"), "created", "utf8");
     await run("mark-edited", "src/App.tsx", "new.ts");
@@ -113,7 +130,7 @@ describe("agentctl", () => {
     const listed = await run("list-files");
     expect(JSON.parse(listed.stdout)).toEqual({
       ok: true,
-      kind: "files",
+      kind: "file_refs",
       files: [
         { path: "contracts/order-api.json", version: 2 },
         { path: "src/App.tsx", version: 3 },
@@ -124,6 +141,19 @@ describe("agentctl", () => {
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
     )).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("discovers registered agents and their responsibilities", async () => {
+    const listed = await run("list-agents");
+    expect(JSON.parse(listed.stdout)).toEqual({
+      ok: true,
+      kind: "agent_profiles",
+      agents: [
+        { id: "backend", description: "Owns APIs" },
+        { id: "frontend", description: "" },
+      ],
+    });
+    expect(received.at(-1)?.body).toEqual({ kind: "list_agents" });
   });
 
   it("submits owner-aware tasks from the instructed JSON file", async () => {

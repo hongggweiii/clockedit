@@ -72,7 +72,7 @@ describe("Agent coordination tools", () => {
       "node .coordination/agentctl.mjs list-files",
     );
     expect(prompt).toContain(
-      "node .coordination/agentctl.mjs fetch <path>",
+      "node .coordination/agentctl.mjs fetch <path> [path ...]",
     );
     expect(prompt).toContain("mark-edited <path>");
     expect(prompt).toContain("submits every tracked edited file");

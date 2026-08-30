@@ -50,7 +50,7 @@ write intent; a `commit` reports the modifications.
 ```json
 {
   "ok": true,
-  "kind": "files",
+  "kind": "file_refs",
   "files": [
     { "path": "repoA/src/App.tsx", "version": 1 },
     { "path": "shared/order-api.contract.md", "version": 3 }
@@ -64,8 +64,8 @@ the server can record that the task read it.
 ### Fetch files
 
 The shared request schema accepts one or more unique paths. `agentctl fetch`
-sends one path at a time so each returned file can be validated and written to
-the matching workspace path.
+sends one or more paths so each returned file can be validated and written to
+its matching workspace path.
 
 ```json
 {
@@ -77,10 +77,12 @@ the matching workspace path.
 ```json
 {
   "ok": true,
-  "kind": "file",
-  "path": "shared/order-api.contract.md",
-  "version": 3,
-  "content": "# Order API contract"
+  "kind": "files",
+  "files": [{
+    "path": "shared/order-api.contract.md",
+    "version": 3,
+    "content": "# Order API contract"
+  }]
 }
 ```
 
@@ -124,6 +126,17 @@ or read dependency moved, the server rejects the entire commit:
 
 The Agent then refetches the moved files, reapplies its work, and retries.
 
+If one or more requested files are missing, the router returns all missing
+paths together:
+
+```json
+{
+  "ok": false,
+  "code": "NOT_FOUND",
+  "paths": ["missing.ts", "other-missing.ts"]
+}
+```
+
 ### Create owner-aware tasks
 
 ```json
@@ -145,6 +158,21 @@ Agent-profile discovery and dispatch belong to the router integration. The
 harness instructs the Agent to select an available Agent id as `owner`, write
 the tasks to the workspace path represented by `<json-file>`, and submit that
 same path with `create-tasks <json-file>`.
+
+The `list_agents` request discovers currently registered Agents. Its
+`agent_profiles` response contains the Agent model's `id` and `description`.
+The description is an empty string when no responsibility was provided:
+
+```json
+{
+  "ok": true,
+  "kind": "agent_profiles",
+  "agents": [
+    { "id": "backend", "description": "Owns APIs" },
+    { "id": "frontend", "description": "" }
+  ]
+}
+```
 
 ## Ownership boundary
 

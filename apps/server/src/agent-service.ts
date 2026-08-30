@@ -6,6 +6,7 @@ import { JsonStore } from "./store.js";
 import type {
   Agent,
   AgentRun,
+  AgentProfile,
   AgentRunner,
   CoordinationContext,
   CreateAgentInput,
@@ -14,12 +15,16 @@ import type {
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { Router } from "./router/router.js";
+import type { Response as ProtocolResponse } from "./router/router.types.js";
+import { openAgentEvents, type AgentEventsConnection } from "./agent-events.js";
 
 const now = () => new Date().toISOString();
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
+  private readonly eventConnections = new Map<string, AgentEventsConnection>();
+  private readonly dispatchQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -48,7 +53,16 @@ export class AgentService {
         }
       }
     });
-    for (const agent of this.store.snapshot().agents) this.registerAgent(agent.id, agent.description);
+  }
+
+  async connectInitializedAgents(): Promise<void> {
+    if (!this.router || !this.coordination) return;
+    const snapshot = this.store.snapshot();
+    for (const agent of snapshot.agents) {
+      if (agent.status !== "stopped" && snapshot.runs.some((run) => run.agentId === agent.id)) {
+        await this.ensureAgentConnection(agent);
+      }
+    }
   }
 
   listAgents(): Agent[] {
@@ -63,6 +77,11 @@ export class AgentService {
       throw new HttpError(404, "Agent not found");
     }
     return agent;
+  }
+
+  getAgentProfile(id: string): AgentProfile | null {
+    const agent = this.store.snapshot().agents.find((item) => item.id === id);
+    return agent ? { id: agent.id, description: agent.description } : null;
   }
 
   async createAgent(input: CreateAgentInput): Promise<Agent> {
@@ -82,7 +101,7 @@ export class AgentService {
     };
     await this.workspaces.create(agent);
     await this.store.mutate((database) => database.agents.push(agent));
-    this.registerAgent(agent.id, agent.description);
+    await this.ensureAgentConnection(agent);
     return agent;
   }
 
@@ -113,6 +132,7 @@ export class AgentService {
 
   async deleteAgent(id: string): Promise<{ archivedWorkspace: string }> {
     const agent = this.getAgent(id);
+    this.disconnectAgent(agent.id);
     await this.cancelExecution(id);
     const archivedWorkspace = await this.workspaces.archive(agent);
     await this.store.mutate((database) => {
@@ -124,17 +144,15 @@ export class AgentService {
     return { archivedWorkspace };
   }
 
-  private registerAgent(agentId: string, description = ""): void {
-    if (!this.router || this.router.hasAgent(agentId)) return;
-    this.router?.registerAgent(agentId, { send: async () => undefined }, { description });
-  }
-
   async startAgent(id: string): Promise<Agent> {
-    return this.setStatus(id, "ready");
+    const agent = await this.setStatus(id, "ready");
+    await this.ensureAgentConnection(agent);
+    return agent;
   }
 
   async stopAgent(id: string): Promise<Agent> {
     this.getAgent(id);
+    this.disconnectAgent(id);
     await this.cancelExecution(id);
     return this.setStatus(id, "stopped");
   }
@@ -254,6 +272,7 @@ export class AgentService {
       }
     });
     try {
+      await this.ensureAgentConnection(agentAtStart);
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
@@ -336,5 +355,50 @@ export class AgentService {
     } finally {
       this.cancellationRequests.delete(agentId);
     }
+  }
+
+  private async ensureAgentConnection(agent: Agent): Promise<void> {
+    if (!this.router || !this.coordination || this.eventConnections.has(agent.id)) return;
+    const connection = await openAgentEvents({
+      baseUrl: this.coordination.baseUrl,
+      agentId: agent.id,
+      ...(this.coordination.authToken ? { authToken: this.coordination.authToken } : {}),
+      onMessage: (message) => this.enqueueDispatchedMessage(agent.id, message),
+    });
+    this.eventConnections.set(agent.id, connection);
+    void connection.settled
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.eventConnections.get(agent.id) === connection) {
+          this.eventConnections.delete(agent.id);
+          this.router?.unregisterAgent(agent.id);
+        }
+      });
+  }
+
+  private disconnectAgent(agentId: string): void {
+    const connection = this.eventConnections.get(agentId);
+    if (!connection) return;
+    connection.close();
+    this.eventConnections.delete(agentId);
+    this.router?.unregisterAgent(agentId);
+  }
+
+  private enqueueDispatchedMessage(agentId: string, message: ProtocolResponse): void {
+    const previous = this.dispatchQueues.get(agentId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const active = this.activeExecutions.get(agentId);
+        if (active) await active;
+        await this.sendMessage(
+          agentId,
+          "A coordination message was dispatched to you:\n\n" + JSON.stringify(message),
+        );
+      });
+    this.dispatchQueues.set(agentId, next);
+    void next.finally(() => {
+      if (this.dispatchQueues.get(agentId) === next) this.dispatchQueues.delete(agentId);
+    });
   }
 }

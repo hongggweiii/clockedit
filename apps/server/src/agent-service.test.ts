@@ -71,23 +71,23 @@ describe("Agent lifecycle", () => {
     expect(service.listAgents()).toHaveLength(0);
   });
 
-  it("registers created agents with the coordination router", async () => {
+  it("exposes created agent profiles to the coordination layer", async () => {
     const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
     const service = await makeService(new FakeRunner(), router);
     const agent = await service.createAgent({ name: "Coordinated" });
 
-    expect(router.hasAgent(agent.id)).toBe(true);
+    expect(service.getAgentProfile(agent.id)).toEqual({ id: agent.id, description: "" });
     await service.deleteAgent(agent.id);
-    expect(router.hasAgent(agent.id)).toBe(false);
+    expect(service.getAgentProfile(agent.id)).toBeNull();
   });
 
-  it("can initialize repeatedly without re-registering agents", async () => {
+  it("can initialize repeatedly without changing agent profiles", async () => {
     const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
     const service = await makeService(new FakeRunner(), router);
     const agent = await service.createAgent({ name: "Idempotent" });
 
     await expect(service.initialize()).resolves.toBeUndefined();
-    expect(router.hasAgent(agent.id)).toBe(true);
+    expect(service.getAgentProfile(agent.id)).toEqual({ id: agent.id, description: "" });
   });
 
   it("persists a playground conversation", async () => {

@@ -34,7 +34,7 @@ describe("agentctl", () => {
       if (body.kind === "list_files") {
         result = {
           ok: true,
-          kind: "files",
+          kind: "file_refs",
           files: [
             { path: "contracts/order-api.json", version: 2 },
             { path: "src/App.tsx", version: 3 },
@@ -86,6 +86,14 @@ describe("agentctl", () => {
 
   it("fetches dependencies and commits every tracked edited file", async () => {
     await run("fetch", "contracts/order-api.json", "src/App.tsx");
+    expect(received[0]?.body).toEqual({
+      kind: "fetch",
+      paths: ["contracts/order-api.json", "src/App.tsx"],
+    });
+    expect(await readFile(path.join(workspace, "contracts/order-api.json"), "utf8"))
+      .toBe('{"field":"order_id"}');
+    expect(await readFile(path.join(workspace, "src/App.tsx"), "utf8"))
+      .toBe("old");
     await writeFile(path.join(workspace, "src", "App.tsx"), "updated", "utf8");
     await writeFile(path.join(workspace, "new.ts"), "created", "utf8");
     await run("mark-edited", "src/App.tsx", "new.ts");
@@ -113,7 +121,7 @@ describe("agentctl", () => {
     const listed = await run("list-files");
     expect(JSON.parse(listed.stdout)).toEqual({
       ok: true,
-      kind: "files",
+      kind: "file_refs",
       files: [
         { path: "contracts/order-api.json", version: 2 },
         { path: "src/App.tsx", version: 3 },

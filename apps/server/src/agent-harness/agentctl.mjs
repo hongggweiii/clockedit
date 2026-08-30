@@ -361,7 +361,7 @@ async function listFiles(args) {
     /** @satisfies {Extract<Request, { kind: "list_files" }>} */ ({ kind: "list_files" }),
   );
   const response = await send(request);
-  if (response.kind !== "files" || !Array.isArray(response.files)) {
+  if (response.kind !== "file_refs" || !Array.isArray(response.files)) {
     exitWithError("List files returned an invalid response", response);
   }
   const paths = new Set();
@@ -379,7 +379,7 @@ async function listFiles(args) {
 }
 
 /** @param {string[]} args */
-async function fetchFile(args) {
+async function fetchFiles(args) {
   if (args.length === 0) exitWithError("Usage: agentctl fetch <path> [path ...]");
   const requestedPaths = uniquePaths(args);
   const request = await requestFromSchema(
@@ -542,7 +542,7 @@ switch (command) {
     result = await listFiles(args);
     break;
   case "fetch":
-    result = await fetchFile(args);
+    result = await fetchFiles(args);
     break;
   case "mark-edited":
     result = await markEdited(args);

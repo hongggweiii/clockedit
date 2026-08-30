@@ -22,7 +22,14 @@ export const listAgentsRequestSchema = z.strictObject({
 
 export const commitRequestSchema = z.strictObject({
   kind: z.literal("commit"),
-  writes: uniquePaths(fileWriteSchema, (write) => write.path).min(1),
+  // `.min(1)` must sit on the plain array; chaining after superRefine (inside
+  // uniquePaths) silently no-ops in zod v4.
+  writes: z.array(fileWriteSchema).min(1).superRefine((values, context) => {
+    const paths = values.map((w) => w.path);
+    if (new Set(paths).size !== paths.length) {
+      context.addIssue({ code: "custom", message: "Each path may appear only once" });
+    }
+  }),
   reads: uniquePaths(fileRefSchema, (read) => read.path),
 });
 

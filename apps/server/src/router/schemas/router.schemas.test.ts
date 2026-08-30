@@ -12,31 +12,42 @@ const envelope = (body: unknown, taskId: string | null = null) => ({
 
 describe("router schemas", () => {
   it.each([
-    { kind: "list_files" },
-    { kind: "list_agents" },
-    { kind: "fetch", paths: ["src/App.tsx"] },
+    { body: { kind: "list_files" }, taskId: null },
+    { body: { kind: "list_agents" }, taskId: null },
+    { body: { kind: "fetch", paths: ["src/App.tsx"] }, taskId: null },
     {
-      kind: "commit",
-      writes: [{ path: "src/App.tsx", content: "updated", based_on: 1 }],
-      reads: [],
+      body: {
+        kind: "commit",
+        writes: [{ path: "src/App.tsx", content: "updated", based_on: 1 }],
+        reads: [],
+      },
+      taskId: "task-1",
     },
     {
-      kind: "create_tasks",
-      tasks: [{
-        id: "task-1",
-        detail: "Build the page",
-        owner: "frontend",
-        depends_on: [],
-        writes: ["src/App.tsx"],
-      }],
+      body: {
+        kind: "create_tasks",
+        tasks: [{
+          id: "task-1",
+          detail: "Build the page",
+          owner: "frontend",
+          depends_on: [],
+          writes: ["src/App.tsx"],
+        }],
+      },
+      taskId: null,
     },
-  ])("accepts the push-model $kind request", (body) => {
-    expect(envelopeSchema.safeParse(envelope(body, body.kind === "commit" ? "task-1" : null)).success).toBe(true);
+  ])("accepts the push-model $body.kind request", ({ body, taskId }) => {
+    expect(envelopeSchema.safeParse(envelope(body, taskId)).success).toBe(true);
   });
 
-  it("requires a task id only when reporting done", () => {
+  it("requires a task id for commit and done", () => {
     expect(envelopeSchema.safeParse(envelope({ kind: "done" })).success).toBe(false);
     expect(envelopeSchema.safeParse(envelope({ kind: "done" }, "task-1")).success).toBe(true);
+    expect(envelopeSchema.safeParse(envelope({
+      kind: "commit",
+      writes: [{ path: "a.ts", content: "x", based_on: null }],
+      reads: [],
+    })).success).toBe(false);
   });
 
   it.each(["claim", "intent", "heartbeat", "inbox"])(
@@ -81,7 +92,7 @@ describe("router schemas", () => {
     }).success).toBe(true);
   });
 
-  it("lists unique file references without exposing file contents", () => {
+  it("list_files returns path+version references only (kind:file_refs, no content)", () => {
     expect(responseSchema.safeParse({
       ok: true,
       kind: "file_refs",
@@ -92,7 +103,7 @@ describe("router schemas", () => {
     }).success).toBe(true);
     expect(responseSchema.safeParse({
       ok: true,
-      kind: "files",
+      kind: "file_refs",
       files: [
         { path: "repoA/src/App.tsx", version: 1 },
         { path: "repoA/src/App.tsx", version: 1 },

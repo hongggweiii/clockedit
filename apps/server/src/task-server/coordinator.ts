@@ -1,11 +1,19 @@
 import type { JsonStore } from "../store.js";
-import type { CommitRequest, CreateTasksRequest, DoneRequest, FetchRequest } from "../router/router.types.js";
+import type {
+  CommitRequest,
+  CreateTasksRequest,
+  DoneRequest,
+  FetchRequest,
+  ListFilesRequest,
+  Response,
+} from "../router/router.types.js";
+import type { RouterCoordinator } from "../router/router.js";
+import type { FileStore } from "../storage/file-store.js";
 import { validateDag } from "./dag.js";
 import { plan } from "./scheduler.js";
 import { evaluateCommit, MAX_STRIKES } from "./occ.js";
 import type { AgentPool } from "./agent-pool.js";
 import { createAgentPool } from "./agent-pool.js";
-import type { FileStore } from "./version-store.js";
 import { TaskStore } from "./task-store.js";
 import type { PushAdapter } from "./push-adapter.js";
 import type { InternalTask, NewTask, TaskState } from "./task.types.js";
@@ -31,21 +39,18 @@ export interface CoordinatorDeps {
 }
 
 /**
- * TaskCommitResult mirrors the router's response shape. The router validates
- * envelopes; my callbacks return the semantic result.
+ * The Coordinator: brain of the task-server.
+ *
+ *  - Owns the DAG + state machine (task-store).
+ *  - Dispatches ready tasks to their owner agent via PushAdapter.
+ *  - Implements RouterCoordinator so the Router can hand it validated
+ *    agent messages (fetch / commit / done / createTasks / listFiles).
+ *
+ * OCC failure handling is "immediate-retry": on a stale commit the task
+ * stays `assigned` (same owner) with strikes++ and the agent gets a STALE
+ * response to re-fetch and try again. Bounded by MAX_STRIKES.
  */
-export type TaskCommitResult =
-  | { ok: true; kind: "committed"; newVersions: Record<string, number> }
-  | { ok: false; kind: "stale"; conflictedPaths: string[] };
-
-/**
- * The task-server:
- *  - owns the DAG + state machine
- *  - dispatches to agents by pushing over PushAdapter
- *  - exposes callback hooks (onCommit / onFetch / onDone / onCreateTasks)
- *    that the router invokes when validated agent messages arrive
- */
-export class Coordinator {
+export class Coordinator implements RouterCoordinator {
   private readonly store: JsonStore;
   private readonly taskStore: TaskStore;
   private readonly fileStore: FileStore;
@@ -140,29 +145,41 @@ export class Coordinator {
     }
   }
 
-  // ─── Router callbacks ────────────────────────────────────────────
+  // ─── RouterCoordinator implementation ──────────────────────────────
+  //
+  // These methods are invoked by the Router with pre-validated payloads.
+  // Method names + signatures must match RouterCoordinator in router.ts.
 
-  /**
-   * Called by the router when an agent's `fetch` message is validated.
-   * Returns file contents + head versions. Read-version tracking (which
-   * versions the agent SAW) is currently the router/file-store teammate's
-   * responsibility — this handler is a thin passthrough.
-   */
-  async onFetch(_agentId: string, request: FetchRequest): Promise<Array<{ path: string; version: number; content: string }>> {
-    return this.fileStore.fetch(request.paths);
+  async listFiles(_agentId: string, _request: ListFilesRequest): Promise<Array<{ path: string; version: number }>> {
+    return this.fileStore.list();
+  }
+
+  async fetch(agentId: string, request: FetchRequest): Promise<{
+    found: Array<{ path: string; version: number; content: string }>;
+    missing: string[];
+  }> {
+    const found: Array<{ path: string; version: number; content: string }> = [];
+    const missing: string[] = [];
+    for (const path of request.paths) {
+      const result = await this.fileStore.fetch(agentId, path);
+      if (result.ok) {
+        found.push({ path: result.path, version: result.version, content: result.content });
+      } else {
+        missing.push(path);
+      }
+    }
+    return { found, missing };
   }
 
   /**
-   * Called by the router when an agent's `commit` message is validated.
-   * Runs OCC against FileStore; on success advances the task toward `done`.
-   * On conflict, either resets the task to unassigned (retry) or escalates
-   * after MAX_STRIKES.
+   * Handle an agent's commit. Returns the Response the router will forward
+   * to the agent. Immediate-retry semantics: on STALE, the task stays
+   * `assigned` and the agent re-fetches; on MAX_STRIKES the task escalates.
    *
-   * Note: task state transition to `done` happens only after both `commit`
-   * AND `done` are received. This handler leaves the task in `assigned`
-   * on success — waiting for `done` to close it.
+   * Note: task state transitions to `done` only after an explicit `done`
+   * message — the commit response leaves the task in `assigned`.
    */
-  async onCommit(agentId: string, taskId: string, request: CommitRequest): Promise<TaskCommitResult> {
+  async commit(agentId: string, taskId: string, request: CommitRequest): Promise<Response> {
     const task = this.taskStore.get(taskId);
     if (!task) throw new UnknownTask(taskId);
     if (task.state !== "assigned") {
@@ -181,40 +198,33 @@ export class Coordinator {
     });
 
     if (outcome.kind === "committed") {
-      // Do not transition to done yet — wait for the explicit `done` message.
-      // Just record the successful commit; state stays `assigned`.
-      this.emit({ type: "committed", taskId, newVersions: outcome.newVersions });
-      return { ok: true, kind: "committed", newVersions: outcome.newVersions };
+      this.emit({ type: "committed", taskId, versions: outcome.versions });
+      // Include new_versions so the agent can refresh its local view without a re-fetch.
+      return { ok: true, kind: "committed", new_versions: outcome.versions };
     }
 
     if (outcome.kind === "retry") {
+      // Keep the task assigned; just record the strike. Agent will re-fetch
+      // and re-submit. No re-queue, no re-dispatch.
       await this.taskStore.update(taskId, {
-        state: "unassigned",
         strikes: outcome.strikes,
-        assigned_at: null,
-        read_versions: null,
-        last_error: `OCC conflict on: ${outcome.conflictedPaths.join(", ")}`,
+        last_error: `OCC conflict; ${outcome.moved.length} path(s) moved`,
       });
-      this.emit({ type: "conflict-retry", taskId, strikes: outcome.strikes, conflictedPaths: outcome.conflictedPaths });
-      void this.tick();
-      return { ok: false, kind: "stale", conflictedPaths: outcome.conflictedPaths };
+      this.emit({ type: "conflict-retry", taskId, strikes: outcome.strikes, moved: outcome.moved });
+      return { ok: false, code: "STALE", moved: outcome.moved };
     }
 
     // exhausted → escalated
     await this.taskStore.setState(taskId, "escalated", {
       strikes: outcome.strikes,
-      last_error: `Escalated after ${MAX_STRIKES} strikes. Conflicts on: ${outcome.conflictedPaths.join(", ")}`,
+      last_error: `Escalated after ${MAX_STRIKES} strikes; ${outcome.moved.length} path(s) moved`,
     });
-    this.emit({ type: "escalated", taskId, strikes: outcome.strikes, conflictedPaths: outcome.conflictedPaths });
+    this.emit({ type: "escalated", taskId, strikes: outcome.strikes, moved: outcome.moved });
     void this.tick();
-    return { ok: false, kind: "stale", conflictedPaths: outcome.conflictedPaths };
+    return { ok: false, code: "STALE", moved: outcome.moved };
   }
 
-  /**
-   * Called by the router when an agent's `done` message is validated.
-   * Marks the task as done and re-ticks so downstream deps unblock.
-   */
-  async onDone(agentId: string, taskId: string, _request: DoneRequest): Promise<void> {
+  async done(agentId: string, taskId: string, _request: DoneRequest): Promise<void> {
     const task = this.taskStore.get(taskId);
     if (!task) throw new UnknownTask(taskId);
     if (task.state !== "assigned") {
@@ -228,13 +238,9 @@ export class Coordinator {
     void this.tick();
   }
 
-  /**
-   * Called by the router when an agent's `create_tasks` message is
-   * validated. Appends the proposed tasks to the DAG after DAG-level
-   * validation (cycles, unknown deps, unknown owners).
-   */
-  async onCreateTasks(_agentId: string, request: CreateTasksRequest): Promise<InternalTask[]> {
-    return this.submitTasks(request.tasks);
+  async createTasks(_agentId: string, request: CreateTasksRequest): Promise<Array<{ id: string }>> {
+    const created = await this.submitTasks(request.tasks);
+    return created.map((task) => ({ id: task.id }));
   }
 }
 
@@ -243,8 +249,8 @@ export class Coordinator {
 export type CoordinatorEvent =
   | { type: "state-changed"; taskId: string; state: TaskState }
   | { type: "dispatched"; taskId: string; ownerId: string }
-  | { type: "committed"; taskId: string; newVersions: Record<string, number> }
-  | { type: "conflict-retry"; taskId: string; strikes: number; conflictedPaths: string[] }
-  | { type: "escalated"; taskId: string; strikes: number; conflictedPaths: string[] }
+  | { type: "committed"; taskId: string; versions: Record<string, number> }
+  | { type: "conflict-retry"; taskId: string; strikes: number; moved: Array<{ path: string; had: number; now: number }> }
+  | { type: "escalated"; taskId: string; strikes: number; moved: Array<{ path: string; had: number; now: number }> }
   | { type: "done"; taskId: string }
   | { type: "push-failed"; taskId: string; error: string };

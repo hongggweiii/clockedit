@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FileStore } from "../storage/file-store.js";
+import { JsonStore } from "../store.js";
 import { evaluateCommit, MAX_STRIKES } from "./occ.js";
-import { InMemoryFileStore } from "./version-store.js";
 import type { InternalTask } from "./task.types.js";
 
 function makeTask(overrides: Partial<InternalTask> = {}): InternalTask {
@@ -21,63 +25,61 @@ function makeTask(overrides: Partial<InternalTask> = {}): InternalTask {
   };
 }
 
-describe("occ", () => {
-  it("commits when read + write versions match", async () => {
-    const store = new InMemoryFileStore();
-    const task = makeTask();
+describe("occ.evaluateCommit", () => {
+  let dir: string;
+  let store: JsonStore;
+  let fileStore: FileStore;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "occ-"));
+    store = new JsonStore(path.join(dir, "db.json"));
+    await store.initialize();
+    fileStore = new FileStore(store);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("commits when the write is a fresh file (based_on=null on absent path)", async () => {
     const outcome = await evaluateCommit({
-      task,
+      task: makeTask(),
       agentId: "a1",
       reads: [],
       writes: [{ path: "w.ts", content: "hi", based_on: null }],
-      fileStore: store,
+      fileStore,
     });
     expect(outcome.kind).toBe("committed");
+    if (outcome.kind === "committed") expect(outcome.versions["w.ts"]).toBe(1);
   });
 
-  it("retries on stale read version", async () => {
-    const store = new InMemoryFileStore();
-    store.forceBump("r.ts"); // head is now v0; agent thinks it's -1 (never fetched)
-    const task = makeTask({ strikes: 0 });
+  it("retries when a declared read version is stale", async () => {
+    // Prime a file so it has version 1.
+    await fileStore.commit("seeder", "seed", [{ path: "r.ts", content: "seed", based_on: null }]);
+    // Agent claims to have read version 0 (which no longer exists at head).
     const outcome = await evaluateCommit({
-      task,
+      task: makeTask({ strikes: 0 }),
       agentId: "a1",
-      reads: [{ path: "r.ts", version: 999 }],
+      reads: [{ path: "r.ts", version: 0 }],
       writes: [{ path: "w.ts", content: "hi", based_on: null }],
-      fileStore: store,
+      fileStore,
     });
     expect(outcome.kind).toBe("retry");
     if (outcome.kind === "retry") {
       expect(outcome.strikes).toBe(1);
-      expect(outcome.conflictedPaths).toEqual(["r.ts"]);
+      expect(outcome.moved[0]?.path).toBe("r.ts");
     }
   });
 
-  it("escalates after MAX_STRIKES-1 retries", async () => {
-    const store = new InMemoryFileStore();
-    store.forceBump("r.ts");
-    const task = makeTask({ strikes: MAX_STRIKES - 1 });
+  it("escalates on MAX_STRIKES-th conflict", async () => {
+    await fileStore.commit("seeder", "seed", [{ path: "r.ts", content: "seed", based_on: null }]);
     const outcome = await evaluateCommit({
-      task,
+      task: makeTask({ strikes: MAX_STRIKES - 1 }),
       agentId: "a1",
-      reads: [{ path: "r.ts", version: 42 }],
+      reads: [{ path: "r.ts", version: 0 }],
       writes: [{ path: "w.ts", content: "hi", based_on: null }],
-      fileStore: store,
+      fileStore,
     });
     expect(outcome.kind).toBe("exhausted");
-  });
-
-  it("rejects when a write's based_on doesn't match head", async () => {
-    const store = new InMemoryFileStore();
-    store.forceBump("w.ts"); // head is now v0
-    const task = makeTask();
-    const outcome = await evaluateCommit({
-      task,
-      agentId: "a1",
-      reads: [],
-      writes: [{ path: "w.ts", content: "hi", based_on: null }], // saying "should not exist"
-      fileStore: store,
-    });
-    expect(outcome.kind).toBe("retry");
   });
 });

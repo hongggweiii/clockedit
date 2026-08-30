@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileStore } from "../storage/file-store.js";
 import { JsonStore } from "../store.js";
-import { evaluateCommit } from "./occ.js";
+import { evaluateCommit, MAX_STRIKES } from "./occ.js";
 import type { InternalTask } from "./task.types.js";
 
 function makeTask(overrides: Partial<InternalTask> = {}): InternalTask {
@@ -71,16 +71,16 @@ describe("occ.evaluateCommit", () => {
     }
   });
 
-  it("keeps retrying regardless of strike count (no escalation)", async () => {
+  it("exhausts on the MAX_STRIKES-th conflict", async () => {
     await fileStore.commit("seeder", "seed", [{ path: "r.ts", content: "seed", based_on: null }]);
     const outcome = await evaluateCommit({
-      task: makeTask({ strikes: 99 }),
+      task: makeTask({ strikes: MAX_STRIKES - 1 }),
       agentId: "a1",
       reads: [{ path: "r.ts", version: 0 }],
       writes: [{ path: "w.ts", content: "hi", based_on: null }],
       fileStore,
     });
-    expect(outcome.kind).toBe("retry");
-    if (outcome.kind === "retry") expect(outcome.strikes).toBe(100);
+    expect(outcome.kind).toBe("exhausted");
+    if (outcome.kind === "exhausted") expect(outcome.strikes).toBe(MAX_STRIKES);
   });
 });

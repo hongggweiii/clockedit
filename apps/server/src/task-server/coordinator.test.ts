@@ -116,22 +116,19 @@ describe("Coordinator (push model, real FileStore)", () => {
     expect(pushAdapter.sent).toHaveLength(1);
   });
 
-  it("keeps returning STALE indefinitely on repeated conflicts (no escalation)", async () => {
+  it("drops the task after MAX_STRIKES conflicts", async () => {
     await fileStore.commit("seeder", "seed", [{ path: "w.ts", content: "seed", based_on: null }]);
     await coordinator.submitTasks([newTask({ id: "t1", owner: "a1", writes: ["w.ts"] })]);
     await waitUntil(() => pushAdapter.sent.length === 1);
 
-    for (let i = 0; i < 10; i++) {
-      const response = await coordinator.onCommit("a1", "t1", {
+    for (let i = 0; i < 3; i++) {
+      await coordinator.onCommit("a1", "t1", {
         kind: "commit",
         reads: [],
         writes: [{ path: "w.ts", content: "x", based_on: null }],
       });
-      expect(response.ok).toBe(false);
     }
-    // Task remains assigned; strikes reflect attempts; no escalation.
-    expect(taskStore.get("t1")!.state).toBe("assigned");
-    expect(taskStore.get("t1")!.strikes).toBe(10);
+    expect(taskStore.get("t1")!.state).toBe("dropped");
     expect(pushAdapter.sent).toHaveLength(1);
   });
 

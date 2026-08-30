@@ -11,7 +11,7 @@ import type { RouterCoordinator } from "../router/router.js";
 import type { FileStore } from "../storage/file-store.js";
 import { validateDag } from "./dag.js";
 import { plan } from "./scheduler.js";
-import { evaluateCommit } from "./occ.js";
+import { evaluateCommit, MAX_STRIKES } from "./occ.js";
 import type { AgentPool } from "./agent-pool.js";
 import { createAgentPool } from "./agent-pool.js";
 import { TaskStore } from "./task-store.js";
@@ -48,8 +48,10 @@ export interface CoordinatorDeps {
  *
  * OCC failure handling is "immediate-retry": on a stale commit the task
  * stays `assigned` (same owner) with strikes++ and the agent gets a STALE
- * response to re-fetch and try again. Retries are unbounded; the agent
- * decides when to give up.
+ * response to re-fetch and try again. Bounded by MAX_STRIKES = 3; on the
+ * 3rd conflict the task is dropped (state → "dropped"), the agent gets
+ * a terminal STALE response, and the coordinator ticks so downstream
+ * tasks whose deps included this one stay blocked.
  */
 export class Coordinator implements RouterCoordinator {
   private readonly store: JsonStore;
@@ -170,9 +172,8 @@ export class Coordinator implements RouterCoordinator {
 
   /**
    * Handle an agent's commit. Returns the Response the router will forward
-   * to the agent. Immediate-retry semantics: on STALE, the task stays
-   * `assigned` and the agent re-fetches. Retries are unbounded — the agent
-   * decides when to give up.
+   * to the agent. Immediate-retry semantics: on STALE the task stays
+   * `assigned` and the agent re-fetches; on MAX_STRIKES the task is dropped.
    *
    * Note: task state transitions to `done` only after an explicit `done`
    * message — the commit response leaves the task in `assigned`.
@@ -201,13 +202,24 @@ export class Coordinator implements RouterCoordinator {
       return { ok: true, kind: "committed", new_versions: outcome.versions };
     }
 
-    // Keep the task assigned; just record the strike. Agent will re-fetch
-    // and re-submit. No re-queue, no re-dispatch.
-    await this.taskStore.update(taskId, {
+    if (outcome.kind === "retry") {
+      // Keep the task assigned; just record the strike. Agent will re-fetch
+      // and re-submit. No re-queue, no re-dispatch.
+      await this.taskStore.update(taskId, {
+        strikes: outcome.strikes,
+        last_error: `OCC conflict; ${outcome.moved.length} path(s) moved`,
+      });
+      this.emit({ type: "conflict-retry", taskId, strikes: outcome.strikes, moved: outcome.moved });
+      return { ok: false, code: "STALE", moved: outcome.moved };
+    }
+
+    // exhausted → task is dropped (terminal, no more work).
+    await this.taskStore.setState(taskId, "dropped", {
       strikes: outcome.strikes,
-      last_error: `OCC conflict; ${outcome.moved.length} path(s) moved`,
+      last_error: `Dropped after ${MAX_STRIKES} strikes; ${outcome.moved.length} path(s) moved`,
     });
-    this.emit({ type: "conflict-retry", taskId, strikes: outcome.strikes, moved: outcome.moved });
+    this.emit({ type: "dropped", taskId, strikes: outcome.strikes, moved: outcome.moved });
+    void this.tick();
     return { ok: false, code: "STALE", moved: outcome.moved };
   }
 
@@ -238,5 +250,6 @@ export type CoordinatorEvent =
   | { type: "dispatched"; taskId: string; ownerId: string }
   | { type: "committed"; taskId: string; versions: Record<string, number> }
   | { type: "conflict-retry"; taskId: string; strikes: number; moved: Array<{ path: string; had: number; now: number }> }
+  | { type: "dropped"; taskId: string; strikes: number; moved: Array<{ path: string; had: number; now: number }> }
   | { type: "done"; taskId: string }
   | { type: "push-failed"; taskId: string; error: string };

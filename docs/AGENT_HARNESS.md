@@ -26,6 +26,7 @@ and is also type-checked against the schema-inferred `Request` type.
 
 ```text
 node .coordination/agentctl.mjs list-files
+node .coordination/agentctl.mjs list-agents
 node .coordination/agentctl.mjs fetch shared/order-api.contract.md
 node .coordination/agentctl.mjs mark-edited repoA/src/App.tsx
 node .coordination/agentctl.mjs commit
@@ -36,6 +37,10 @@ node .coordination/agentctl.mjs done
 `list-files` returns available server-side paths and versions without exposing
 file contents or recording a read. The Agent uses it whenever it needs to find
 a shared file and then uses `fetch` for every file it reads or edits.
+
+`list-agents` returns the IDs of currently registered Agents and includes each
+Agent's responsibility description when one has been provided. The Agent can
+use those profiles to choose owners when creating subtasks.
 
 After creating, editing, or deleting a file, the Agent calls `mark-edited`.
 `commit` accepts no path arguments: it submits every tracked edited path and

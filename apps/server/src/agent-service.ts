@@ -48,7 +48,7 @@ export class AgentService {
         }
       }
     });
-    for (const agent of this.store.snapshot().agents) this.registerAgent(agent.id);
+    for (const agent of this.store.snapshot().agents) this.registerAgent(agent.id, agent.description);
   }
 
   listAgents(): Agent[] {
@@ -82,7 +82,7 @@ export class AgentService {
     };
     await this.workspaces.create(agent);
     await this.store.mutate((database) => database.agents.push(agent));
-    this.registerAgent(agent.id);
+    this.registerAgent(agent.id, agent.description);
     return agent;
   }
 
@@ -107,6 +107,7 @@ export class AgentService {
       return structuredClone(agent);
     });
     await this.workspaces.writeInstructions(updated);
+    this.router?.updateAgentProfile(id, { description: updated.description });
     return updated;
   }
 
@@ -123,9 +124,9 @@ export class AgentService {
     return { archivedWorkspace };
   }
 
-  private registerAgent(agentId: string): void {
+  private registerAgent(agentId: string, description = ""): void {
     if (!this.router || this.router.hasAgent(agentId)) return;
-    this.router?.registerAgent(agentId, { send: async () => undefined });
+    this.router?.registerAgent(agentId, { send: async () => undefined }, { description });
   }
 
   async startAgent(id: string): Promise<Agent> {

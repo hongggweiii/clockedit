@@ -13,6 +13,7 @@ const envelope = (body: unknown, taskId: string | null = null) => ({
 describe("router schemas", () => {
   it.each([
     { kind: "list_files" },
+    { kind: "list_agents" },
     { kind: "fetch", paths: ["src/App.tsx"] },
     {
       kind: "commit",
@@ -97,5 +98,13 @@ describe("router schemas", () => {
         { path: "repoA/src/App.tsx", version: 1 },
       ],
     }).success).toBe(false);
+  });
+
+  it("validates agent profiles with optional responsibilities", () => {
+    expect(responseSchema.safeParse({
+      ok: true,
+      kind: "agent_profiles",
+      agents: [{ id: "backend", description: "Owns APIs" }, { id: "frontend", description: "" }],
+    }).success).toBe(true);
   });
 });

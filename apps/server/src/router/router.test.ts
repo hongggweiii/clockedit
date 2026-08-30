@@ -36,6 +36,33 @@ describe("Router", () => {
     expect(done).toHaveBeenCalledWith("agent-1", "task-1", { kind: "done" });
   });
 
+  it("lists registered agent profiles", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    router.registerAgent("agent-1", { send: vi.fn() }, { description: "Builds the frontend" });
+    router.registerAgent("agent-2", { send: vi.fn() });
+
+    await expect(router.handleMessage(envelope({ kind: "list_agents" }))).resolves.toEqual({
+      ok: true,
+      kind: "agent_profiles",
+      agents: [
+        { id: "agent-1", description: "Builds the frontend" },
+        { id: "agent-2", description: "" },
+      ],
+    });
+  });
+
+  it("updates a registered agent description", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    router.registerAgent("agent-1", { send: vi.fn() }, { description: "Old" });
+    router.updateAgentProfile("agent-1", { description: "New" });
+
+    await expect(router.handleMessage(envelope({ kind: "list_agents" }))).resolves.toEqual({
+      ok: true,
+      kind: "agent_profiles",
+      agents: [{ id: "agent-1", description: "New" }],
+    });
+  });
+
   it("dispatches schema-valid responses through the registered channel", async () => {
     const send = vi.fn();
     const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });

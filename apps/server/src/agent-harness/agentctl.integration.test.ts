@@ -40,6 +40,15 @@ describe("agentctl", () => {
             { path: "src/App.tsx", version: 3 },
           ],
         };
+      } else if (body.kind === "list_agents") {
+        result = {
+          ok: true,
+          kind: "agent_profiles",
+          agents: [
+            { id: "backend", description: "Owns APIs" },
+            { id: "frontend", description: "" },
+          ],
+        };
       } else if (body.kind === "fetch") {
         result = {
           ok: true,
@@ -132,6 +141,19 @@ describe("agentctl", () => {
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
     )).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("discovers registered agents and their responsibilities", async () => {
+    const listed = await run("list-agents");
+    expect(JSON.parse(listed.stdout)).toEqual({
+      ok: true,
+      kind: "agent_profiles",
+      agents: [
+        { id: "backend", description: "Owns APIs" },
+        { id: "frontend", description: "" },
+      ],
+    });
+    expect(received.at(-1)?.body).toEqual({ kind: "list_agents" });
   });
 
   it("submits owner-aware tasks from the instructed JSON file", async () => {

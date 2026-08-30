@@ -12,6 +12,7 @@ const toolSource = fileURLToPath(new URL("./agentctl.mjs", import.meta.url));
 
 export const coordinationWorkflowInstructions = [
   "- Use `node .coordination/agentctl.mjs list-files` whenever you need to discover shared files to read or edit.",
+  "- Use `node .coordination/agentctl.mjs list-agents` to discover registered Agents and their responsibilities before creating subtasks.",
   "- Use `node .coordination/agentctl.mjs fetch <path> [path ...]` before reading or editing shared files.",
   "- After creating, editing, or deleting a file, immediately run `node .coordination/agentctl.mjs mark-edited <path>...` so every changed path is tracked.",
   "- Before finishing, run `node .coordination/agentctl.mjs commit`; it submits every tracked edited file together.",

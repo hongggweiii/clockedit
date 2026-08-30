@@ -159,6 +159,21 @@ harness instructs the Agent to select an available Agent id as `owner`, write
 the tasks to the workspace path represented by `<json-file>`, and submit that
 same path with `create-tasks <json-file>`.
 
+The `list_agents` request discovers currently registered Agents. Its
+`agent_profiles` response contains the Agent model's `id` and `description`.
+The description is an empty string when no responsibility was provided:
+
+```json
+{
+  "ok": true,
+  "kind": "agent_profiles",
+  "agents": [
+    { "id": "backend", "description": "Owns APIs" },
+    { "id": "frontend", "description": "" }
+  ]
+}
+```
+
 ## Ownership boundary
 
 - The shared schemas own request and response validation. The harness installs

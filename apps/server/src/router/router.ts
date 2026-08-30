@@ -1,6 +1,7 @@
 import {
   commitResponseSchema,
   doneResponseSchema,
+  agentProfilesResponseSchema,
   envelopeSchema,
   fileRefsResponseSchema,
   filesResponseSchema,
@@ -9,6 +10,7 @@ import {
   tasksResponseSchema,
 } from "./schemas/router.schemas.js";
 import type { CommitRequest, CreateTasksRequest, DoneRequest, Envelope, FetchRequest, ListFilesRequest, Response } from "./router.types.js";
+import type { AgentProfile } from "../types.js";
 
 export interface AgentChannel {
   send(response: Response): void | Promise<void>;
@@ -51,14 +53,22 @@ export function createRouter(coordinator: RouterCoordinator): Router {
 
 /** Private protocol boundary. Agent channels are registered during startup. */
 export class Router {
-  private readonly agents = new Map<string, AgentChannel>();
+  private readonly agents = new Map<string, { channel: AgentChannel; description?: AgentProfile["description"] }>();
 
   constructor(private readonly coordinator: RouterCoordinator) {}
 
-  registerAgent(agentId: string, channel: AgentChannel): () => void {
+  registerAgent(agentId: string, channel: AgentChannel, profile: Partial<Pick<AgentProfile, "description">> = {}): () => void {
     if (!agentId.trim()) throw new Error("agentId is required");
-    this.agents.set(agentId, channel);
-    return () => { if (this.agents.get(agentId) === channel) this.agents.delete(agentId); };
+    this.agents.set(agentId, {
+      channel,
+      ...(profile.description !== undefined ? { description: profile.description } : {}),
+    });
+    return () => { if (this.agents.get(agentId)?.channel === channel) this.agents.delete(agentId); };
+  }
+
+  updateAgentProfile(agentId: string, profile: Pick<AgentProfile, "description">): void {
+    const registration = this.agents.get(agentId);
+    if (registration) registration.description = profile.description;
   }
 
   unregisterAgent(agentId: string): void {
@@ -68,9 +78,9 @@ export class Router {
   hasAgent(agentId: string): boolean { return this.agents.has(agentId); }
 
   async dispatch(agentId: string, response: Response): Promise<void> {
-    const channel = this.agents.get(agentId);
-    if (!channel) throw new Error(`Agent is not registered: ${agentId}`);
-    await channel.send(responseSchema.parse(response));
+    const registration = this.agents.get(agentId);
+    if (!registration) throw new Error(`Agent is not registered: ${agentId}`);
+    await registration.channel.send(responseSchema.parse(response));
   }
 
   async handleMessage(input: unknown): Promise<Response | null> {
@@ -89,6 +99,15 @@ export class Router {
           ok: true,
           kind: "file_refs",
           files: await this.coordinator.listFiles(agent, body),
+        });
+      case "list_agents":
+        return agentProfilesResponseSchema.parse({
+          ok: true,
+          kind: "agent_profiles",
+          agents: [...this.agents.entries()].map(([agentId, registration]): AgentProfile => ({
+            id: agentId,
+            description: registration.description ?? "",
+          })),
         });
       case "fetch": {
         const files = await this.coordinator.onFetch(agent, body);

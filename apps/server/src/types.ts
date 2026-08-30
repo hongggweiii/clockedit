@@ -17,6 +17,9 @@ export interface Agent {
   updatedAt: string;
 }
 
+/** Public identity and responsibility details exposed to coordinating Agents. */
+export type AgentProfile = Pick<Agent, "id" | "description">;
+
 export interface Message {
   id: string;
   agentId: string;

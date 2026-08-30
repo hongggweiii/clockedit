@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AgentProfile } from "../../types.js";
 import { newTaskSchema } from "./task.schemas.js";
 import { fileRefSchema, fileWriteSchema, pathSchema, uniquePaths } from "./file.schemas.js";
 import { taskIdSchema } from "./task.schemas.js";
@@ -15,6 +16,10 @@ export const listFilesRequestSchema = z.strictObject({
   kind: z.literal("list_files"),
 });
 
+export const listAgentsRequestSchema = z.strictObject({
+  kind: z.literal("list_agents"),
+});
+
 export const commitRequestSchema = z.strictObject({
   kind: z.literal("commit"),
   writes: uniquePaths(fileWriteSchema, (write) => write.path).min(1),
@@ -27,6 +32,7 @@ export const createTasksRequestSchema = z.strictObject({ kind: z.literal("create
 
 export const requestSchema = z.discriminatedUnion("kind", [
   listFilesRequestSchema,
+  listAgentsRequestSchema,
   fetchRequestSchema,
   commitRequestSchema,
   doneRequestSchema,
@@ -49,6 +55,17 @@ export const fileRefsResponseSchema = z.strictObject({
   ok: z.literal(true),
   kind: z.literal("file_refs"),
   files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096),
+});
+
+export const agentProfileSchema: z.ZodType<AgentProfile> = z.strictObject({
+  id: nonEmptyStringSchema,
+  description: z.string(),
+});
+
+export const agentProfilesResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  kind: z.literal("agent_profiles"),
+  agents: z.array(agentProfileSchema).max(4_096),
 });
 
 export const filesResponseSchema = z.strictObject({
@@ -89,6 +106,7 @@ export const commitResponseSchema = z.union([
 ]);
 
 export const responseSchema = z.union([
+  agentProfilesResponseSchema,
   fileRefsResponseSchema,
   filesResponseSchema,
   committedResponseSchema,

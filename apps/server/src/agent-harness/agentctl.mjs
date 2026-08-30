@@ -379,6 +379,29 @@ async function listFiles(args) {
 }
 
 /** @param {string[]} args */
+async function listAgents(args) {
+  if (args.length !== 0) exitWithError("Usage: agentctl list-agents");
+  const request = await requestFromSchema(
+    /** @satisfies {Extract<Request, { kind: "list_agents" }>} */ ({ kind: "list_agents" }),
+  );
+  const response = await send(request);
+  if (response.kind !== "agent_profiles" || !Array.isArray(response.agents)) {
+    exitWithError("List agents returned an invalid response", response);
+  }
+  const ids = new Set();
+  for (const agent of response.agents) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string" || !agent.id.trim() || ids.has(agent.id)) {
+      exitWithError("List agents returned an invalid agent profile", agent);
+    }
+    if (typeof agent.description !== "string") {
+      exitWithError("List agents returned an invalid agent profile", agent);
+    }
+    ids.add(agent.id);
+  }
+  return response;
+}
+
+/** @param {string[]} args */
 async function fetchFiles(args) {
   if (args.length === 0) exitWithError("Usage: agentctl fetch <path> [path ...]");
   const requestedPaths = uniquePaths(args);
@@ -527,6 +550,7 @@ function usage() {
     "",
     "Commands:",
     "  list-files",
+    "  list-agents",
     "  fetch <path> [path ...]",
     "  mark-edited <path> [path ...]",
     "  commit",
@@ -540,6 +564,9 @@ let result;
 switch (command) {
   case "list-files":
     result = await listFiles(args);
+    break;
+  case "list-agents":
+    result = await listAgents(args);
     break;
   case "fetch":
     result = await fetchFiles(args);

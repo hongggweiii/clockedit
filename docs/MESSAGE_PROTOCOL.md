@@ -143,11 +143,14 @@ The Agent then refetches the moved files, reapplies its work, and retries.
 
 Agent-profile discovery and dispatch belong to the router integration. The
 harness instructs the Agent to select an available Agent id as `owner`, write
-the tasks to a JSON file, and submit that file with `create-tasks`.
+the tasks to the workspace path represented by `<json-file>`, and submit that
+same path with `create-tasks <json-file>`.
 
 ## Ownership boundary
 
-- The shared schemas own request and response validation.
+- The shared schemas own request and response validation. The harness installs
+  a runtime request schema generated from the router's Zod request schema so
+  client request construction follows the same contract.
 - The harness owns Agent commands, local read/edit tracking, and workflow
   instructions.
 - The router owns Agent discovery, task dispatch, and transport integration.

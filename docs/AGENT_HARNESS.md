@@ -17,9 +17,10 @@ that context to `agentctl` through environment variables. Secret values are
 not placed in container command arguments.
 
 Before every coordinated turn, the runner installs the client at
-`.coordination/agentctl.mjs` and adds the workflow rules to the Agent prompt.
-The request objects in the client are type-checked against the `Request` type
-inferred from the shared Zod schemas.
+`.coordination/agentctl.mjs`, generates `.coordination/request-schema.json`
+from the router's Zod request schema, and adds the workflow rules to the Agent
+prompt. Every outgoing request is built through that installed runtime schema
+and is also type-checked against the schema-inferred `Request` type.
 
 ## Agent workflow
 
@@ -51,7 +52,8 @@ accept a coordinated task run as complete.
 When the task context includes available Agent profiles, the Agent may create
 subtasks for better-suited Agents. It writes a JSON array whose objects contain
 `id`, `detail`, `owner`, `depends_on`, and `writes`, using an available Agent id
-as `owner`, then passes the file to `create-tasks`.
+as `owner`. The Agent saves that array to the workspace path represented by
+`<json-file>` and passes that same path to `create-tasks <json-file>`.
 
 The server store starts with a small fake repository for the demo. Future UI
 uploads should populate that same store. Files should not be copied directly

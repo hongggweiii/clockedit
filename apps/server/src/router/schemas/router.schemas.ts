@@ -83,6 +83,11 @@ export const staleResponseSchema = z.strictObject({
   moved: z.array(movedFileSchema).min(1),
 });
 
+export const commitResponseSchema = z.union([
+  committedResponseSchema,
+  staleResponseSchema,
+]);
+
 export const responseSchema = z.union([
   fileRefsResponseSchema,
   filesResponseSchema,

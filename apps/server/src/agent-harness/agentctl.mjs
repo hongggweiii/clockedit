@@ -297,10 +297,9 @@ function taskId(required) {
  */
 async function send(body, requiresTask = false) {
   const baseUrl = requiredEnvironment("COORDINATION_BASE_URL");
-  const projectId = requiredEnvironment("COORDINATION_PROJECT_ID");
   const agent = requiredEnvironment("COORDINATION_AGENT_ID");
   const endpoint = new URL(
-    `api/projects/${encodeURIComponent(projectId)}/coordination/messages`,
+    "messages",
     baseUrl.endsWith("/") ? baseUrl : baseUrl + "/",
   );
   /** @type {Record<string, string>} */
@@ -381,30 +380,44 @@ async function listFiles(args) {
 
 /** @param {string[]} args */
 async function fetchFile(args) {
-  if (args.length !== 1) exitWithError("Usage: agentctl fetch <path>");
-  const requestedPath = normalizeProtocolPath(args[0] ?? "");
+  if (args.length === 0) exitWithError("Usage: agentctl fetch <path> [path ...]");
+  const requestedPaths = uniquePaths(args);
   const request = await requestFromSchema(
     /** @satisfies {Extract<Request, { kind: "fetch" }>} */ ({
       kind: "fetch",
-      paths: [requestedPath],
+      paths: requestedPaths,
     }),
   );
   const response = await send(request);
-  if (
-    response.kind !== "file" ||
-    response.path !== requestedPath ||
-    !Number.isInteger(response.version) ||
-    response.version < 0 ||
-    typeof response.content !== "string"
-  ) {
+  if (response.kind !== "files" || !Array.isArray(response.files)) {
     exitWithError("Fetch returned an invalid file response", response);
   }
-  const destination = workspacePath(requestedPath);
-  await mkdir(path.dirname(destination), { recursive: true });
-  await writeFile(destination, response.content, "utf8");
   const state = await readState();
-  state.versions[requestedPath] = response.version;
-  state.edited = state.edited.filter((filePath) => filePath !== requestedPath);
+  const returnedPaths = new Set();
+  for (const file of response.files) {
+    if (!file || typeof file !== "object" || typeof file.path !== "string") {
+      exitWithError("Fetch returned an invalid file response", file);
+    }
+    const filePath = normalizeProtocolPath(file.path);
+    if (
+      returnedPaths.has(filePath) ||
+      !requestedPaths.includes(filePath) ||
+      !Number.isInteger(file.version) ||
+      file.version < 0 ||
+      typeof file.content !== "string"
+    ) {
+      exitWithError("Fetch returned an invalid file response", file);
+    }
+    returnedPaths.add(filePath);
+    const destination = workspacePath(filePath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, file.content, "utf8");
+    state.versions[filePath] = file.version;
+    state.edited = state.edited.filter((editedPath) => editedPath !== filePath);
+  }
+  if (returnedPaths.size !== requestedPaths.length) {
+    exitWithError("Fetch response did not include every requested file", response);
+  }
   state.doneTaskId = null;
   await writeState(state);
   return response;
@@ -514,7 +527,7 @@ function usage() {
     "",
     "Commands:",
     "  list-files",
-    "  fetch <path>",
+    "  fetch <path> [path ...]",
     "  mark-edited <path> [path ...]",
     "  commit",
     "  create-tasks <json-file>",

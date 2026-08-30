@@ -41,15 +41,16 @@ describe("agentctl", () => {
           ],
         };
       } else if (body.kind === "fetch") {
-        const requestedPath = body.paths[0];
         result = {
           ok: true,
-          kind: "file",
-          path: requestedPath,
-          version: requestedPath?.startsWith("contracts/") ? 2 : 3,
-          content: requestedPath?.startsWith("contracts/")
-            ? '{"field":"order_id"}'
-            : "old",
+          kind: "files",
+          files: body.paths.map((requestedPath) => ({
+            path: requestedPath,
+            version: requestedPath.startsWith("contracts/") ? 2 : 3,
+            content: requestedPath.startsWith("contracts/")
+              ? '{"field":"order_id"}'
+              : "old",
+          })),
         };
       } else {
         result = { ok: true, kind: "committed" };
@@ -84,8 +85,7 @@ describe("agentctl", () => {
   }
 
   it("fetches dependencies and commits every tracked edited file", async () => {
-    await run("fetch", "contracts/order-api.json");
-    await run("fetch", "src/App.tsx");
+    await run("fetch", "contracts/order-api.json", "src/App.tsx");
     await writeFile(path.join(workspace, "src", "App.tsx"), "updated", "utf8");
     await writeFile(path.join(workspace, "new.ts"), "created", "utf8");
     await run("mark-edited", "src/App.tsx", "new.ts");

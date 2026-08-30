@@ -25,7 +25,9 @@ const service = new AgentService(config, store, workspaces, runner, router, {
 await service.initialize();
 
 const app = await createApp(config, service, router);
-const taskServer = await createTaskServerApp(config, router);
+const taskServer = await createTaskServerApp(config, router, (agentId) =>
+  service.getAgentProfile(agentId), // Abstract agent profile resolution to  AgentService, which has access to the store.
+);
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "Shutting down");
@@ -39,3 +41,4 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 
 await app.listen({ host: config.host, port: config.port });
 await taskServer.listen({ host: config.taskServerHost, port: config.taskServerPort });
+await service.connectInitializedAgents();

@@ -89,14 +89,16 @@ agents register a channel during initialization, agent messages are validated
 against the router schemas, and coordinator results are validated again before
 they are returned or dispatched to an agent.
 
-`createTaskServerApp` exposes only `/health` and authenticated `/messages`; it
-does not register CORS, static files, or frontend routes. The eventual process
-initializer should construct the coordinator, construct `Router` with the
-coordinator, register each initialized agent, and listen on a private host or
-network interface. The frontend uses `APP_AUTH_TOKEN`; agent traffic uses the
-separate `TASK_SERVER_AUTH_TOKEN`. Successful `done` requests receive a JSON
-acknowledgement for compatibility with `agentctl`. A WebSocket/SSE adapter can use
-`Router.dispatch` without changing the coordinator or protocol schemas.
+`createTaskServerApp` exposes only `/health`, authenticated `/messages`, and
+authenticated `/events`; it does not register CORS, static files, or frontend
+routes. The process initializer constructs the coordinator and `Router` and
+listens on a private host or network interface. Each initialized Agent opens one
+long-lived `/events` SSE connection; that connection registers the Agent and
+becomes its required `AgentChannel`. Disconnecting removes the registration.
+The frontend uses `APP_AUTH_TOKEN`; agent traffic uses the separate
+`TASK_SERVER_AUTH_TOKEN`. Successful `done` requests receive a JSON
+acknowledgement for compatibility with `agentctl`. `Router.dispatch` writes
+directly to the already-open SSE connection.
 
 An `agentctl` client can send a message like this:
 

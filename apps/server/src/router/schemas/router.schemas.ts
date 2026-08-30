@@ -43,13 +43,52 @@ export const envelopeSchema = z.strictObject({
 });
 
 const movedFileSchema = z.strictObject({ path: pathSchema, had: fileVersionSchema, now: fileVersionSchema });
+const fetchedFileSchema = fileRefSchema.extend({ content: z.string() });
+
+export const fileRefsResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  kind: z.literal("file_refs"),
+  files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096),
+});
+
+export const filesResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  kind: z.literal("files"),
+  files: uniquePaths(fetchedFileSchema, (file) => file.path).min(1).max(4_096),
+});
+
+export const committedResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  kind: z.literal("committed"),
+  new_versions: z.record(z.string(), fileVersionSchema).optional(),
+});
+
+export const doneResponseSchema = z.strictObject({ ok: z.literal(true), kind: z.literal("done") });
+
+export const tasksResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  kind: z.literal("tasks"),
+  task_ids: z.array(taskIdSchema),
+});
+
+export const notFoundResponseSchema = z.strictObject({
+  ok: z.literal(false),
+  code: z.literal("NOT_FOUND"),
+  paths: uniquePaths(pathSchema, (path) => path).min(1).max(4_096),
+});
+
+export const staleResponseSchema = z.strictObject({
+  ok: z.literal(false),
+  code: z.literal("STALE"),
+  moved: z.array(movedFileSchema).min(1),
+});
 
 export const responseSchema = z.union([
-  z.strictObject({ ok: z.literal(true), kind: z.literal("files"), files: uniquePaths(fileRefSchema, (file) => file.path).max(4_096) }),
-  z.strictObject({ ok: z.literal(true), kind: z.literal("file"), path: pathSchema, version: fileVersionSchema, content: z.string() }),
-  z.strictObject({ ok: z.literal(true), kind: z.literal("committed"), new_versions: z.record(z.string(), fileVersionSchema).optional() }),
-  z.strictObject({ ok: z.literal(true), kind: z.literal("done") }),
-  z.strictObject({ ok: z.literal(true), kind: z.literal("tasks"), task_ids: z.array(taskIdSchema) }),
-  z.strictObject({ ok: z.literal(false), code: z.literal("NOT_FOUND"), path: pathSchema }),
-  z.strictObject({ ok: z.literal(false), code: z.literal("STALE"), moved: z.array(movedFileSchema).min(1) }),
+  fileRefsResponseSchema,
+  filesResponseSchema,
+  committedResponseSchema,
+  doneResponseSchema,
+  tasksResponseSchema,
+  notFoundResponseSchema,
+  staleResponseSchema,
 ]);

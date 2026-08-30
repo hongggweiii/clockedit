@@ -550,6 +550,7 @@ function usage() {
     "",
     "Commands:",
     "  list-files",
+    "  list-agent",
     "  list-agents",
     "  fetch <path> [path ...]",
     "  mark-edited <path> [path ...]",
@@ -566,6 +567,7 @@ switch (command) {
     result = await listFiles(args);
     break;
   case "list-agents":
+  case "list-agent":
     result = await listAgents(args);
     break;
   case "fetch":

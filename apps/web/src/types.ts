@@ -48,3 +48,22 @@ export interface SystemInfo {
   containerEngine: string | null;
   runtime: string;
 }
+
+export type TaskState = "blocked" | "assigned" | "escalated" | "done";
+
+export interface Task {
+  id: string;
+  state: TaskState;
+  owner: string; // agent running this task
+  depends_on: string[];
+  writes: string[];
+  strikes: number; // 0..3, then escalated
+}
+
+export interface SystemEvent {
+  seq: number;
+  type: "assigned" | "commit_ok" | "commit_rejected" | "escalated";
+  agent: string;
+  task_id: string;
+  detail: string;
+}

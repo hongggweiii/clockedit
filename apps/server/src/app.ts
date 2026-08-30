@@ -9,12 +9,6 @@ import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
 import type { Router } from "./router/router.js";
 
-import type { CoordinationMessageHandler } from "./router/coordination-handler.js";
-import {
-  envelopeSchema,
-  responseSchema,
-} from "./router/schemas/router.schemas.js";
-
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
 const createAgentBody = z.object({
@@ -22,24 +16,6 @@ const createAgentBody = z.object({
   description: z.string().max(500).optional(),
   instructions: z.string().max(10_000).optional(),
   role: z.string().trim().min(1).max(40).optional(),
-});
-const projectIdParams = z.object({ id: z.string().uuid() });
-const taskIntentBody = z.object({
-  reads: z.array(z.string().min(1)).default([]),
-  writes: z.array(z.string().min(1)).default([]),
-});
-const projectBody = z.object({
-  name: z.string().trim().min(1).max(120),
-  tasks: z.array(
-    z.object({
-      id: z.string().min(1).optional(),
-      title: z.string().trim().min(1).max(200),
-      description: z.string().trim().min(1).max(10_000),
-      role: z.string().trim().min(1).max(40),
-      dependsOn: z.array(z.string().min(1)).default([]),
-      intent: taskIntentBody.default({ reads: [], writes: [] }),
-    }),
-  ).min(1),
 });
 const updateAgentBody = createAgentBody.partial().refine(
   (value) => Object.keys(value).length > 0,
@@ -160,7 +136,7 @@ export async function createApp(
     return { run: service.getRun(id) };
   });
 
-  if (config.nodeEnv === "production") {
+   if (config.nodeEnv === "production") {
     const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
     await app.register(fastifyStatic, {
       root: webRoot,

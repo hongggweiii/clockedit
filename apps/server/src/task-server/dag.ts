@@ -1,4 +1,6 @@
-import type { Task } from "../types.js";
+// DAG utilities that operate on the shared Task shape's { id, depends_on }.
+// Kept schema-agnostic (only reads those two fields) so it works for both
+// InternalTask and NewTask.
 
 export interface CycleError {
   kind: "cycle";
@@ -27,9 +29,14 @@ export interface DagValidationResult {
   topoOrder: string[];
 }
 
-export function validateDag(tasks: readonly Pick<Task, "id" | "dependsOn">[]): DagValidationResult {
+type DagNode = { id: string; depends_on: readonly string[] };
+
+export function validateDag(
+  tasks: readonly DagNode[],
+  existingIds: ReadonlySet<string> = new Set(),
+): DagValidationResult {
   const errors: DagValidationError[] = [];
-  const ids = new Set<string>();
+  const ids = new Set<string>(existingIds);
   const duplicates = new Set<string>();
   for (const task of tasks) {
     if (ids.has(task.id)) duplicates.add(task.id);
@@ -40,7 +47,7 @@ export function validateDag(tasks: readonly Pick<Task, "id" | "dependsOn">[]): D
   }
 
   for (const task of tasks) {
-    const missing = task.dependsOn.filter((dep) => !ids.has(dep));
+    const missing = task.depends_on.filter((dep) => !ids.has(dep));
     if (missing.length > 0) {
       errors.push({ kind: "unknown-dependency", taskId: task.id, missing });
     }
@@ -55,7 +62,7 @@ export function validateDag(tasks: readonly Pick<Task, "id" | "dependsOn">[]): D
 }
 
 export function topoSort(
-  tasks: readonly Pick<Task, "id" | "dependsOn">[],
+  tasks: readonly DagNode[],
 ): { order: string[]; cycleNodes: string[] } {
   const indegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
@@ -64,7 +71,7 @@ export function topoSort(
     adjacency.set(task.id, adjacency.get(task.id) ?? []);
   }
   for (const task of tasks) {
-    for (const dep of task.dependsOn) {
+    for (const dep of task.depends_on) {
       if (!indegree.has(dep)) continue;
       adjacency.get(dep)!.push(task.id);
       indegree.set(task.id, (indegree.get(task.id) ?? 0) + 1);
@@ -93,14 +100,14 @@ export function topoSort(
   return { order, cycleNodes };
 }
 
-export function unblockedByDeps(
-  tasks: readonly Pick<Task, "id" | "dependsOn" | "state">[],
+export function unblockedIds<T extends DagNode & { state: string }>(
+  tasks: readonly T[],
 ): Set<string> {
-  const completed = new Set(tasks.filter((t) => t.state === "completed").map((t) => t.id));
-  const unblocked = new Set<string>();
+  const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
+  const out = new Set<string>();
   for (const task of tasks) {
-    if (task.state !== "pending") continue;
-    if (task.dependsOn.every((dep) => completed.has(dep))) unblocked.add(task.id);
+    if (task.state !== "blocked" && task.state !== "unassigned") continue;
+    if (task.depends_on.every((dep) => done.has(dep))) out.add(task.id);
   }
-  return unblocked;
+  return out;
 }

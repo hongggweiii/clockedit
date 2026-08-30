@@ -1,34 +1,22 @@
 import type { Agent } from "../types.js";
 
+/**
+ * Under the push model dispatch is targeted (Task.owner is an agent id), so
+ * the pool is a thin idle-check over a live agent snapshot.
+ */
 export interface AgentPool {
-  pickIdle(role: string, excludeAgentIds?: ReadonlySet<string>): Agent | null;
-  hasRole(role: string): boolean;
-  rolesRegistered(): string[];
+  isIdle(agentId: string): boolean;
+  exists(agentId: string): boolean;
 }
 
 export function createAgentPool(getAgents: () => readonly Agent[]): AgentPool {
   return {
-    pickIdle(role, excludeAgentIds) {
-      for (const agent of getAgents()) {
-        if (agent.role !== role) continue;
-        if (agent.status !== "ready") continue;
-        if (excludeAgentIds?.has(agent.id)) continue;
-        return agent;
-      }
-      return null;
+    isIdle(agentId) {
+      const agent = getAgents().find((a) => a.id === agentId);
+      return agent?.status === "ready";
     },
-    hasRole(role) {
-      for (const agent of getAgents()) {
-        if (agent.role === role) return true;
-      }
-      return false;
-    },
-    rolesRegistered() {
-      const roles = new Set<string>();
-      for (const agent of getAgents()) {
-        if (agent.role) roles.add(agent.role);
-      }
-      return [...roles];
+    exists(agentId) {
+      return getAgents().some((a) => a.id === agentId);
     },
   };
 }

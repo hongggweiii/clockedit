@@ -10,7 +10,8 @@ import { AgentService } from "../agent-service.js";
 import { WorkspaceManager } from "../workspace.js";
 import { Coordinator } from "./coordinator.js";
 import { TaskStore } from "./task-store.js";
-import { InMemoryVersionStore } from "./version-store.js";
+import { InMemoryFileStore } from "./version-store.js";
+import { NoopPushAdapter } from "./push-adapter.js";
 
 const fakeRunner: AgentRunner = {
   async run() {
@@ -24,23 +25,23 @@ const fakeRunner: AgentRunner = {
   },
 };
 
-function makeAgent(role: string): Agent {
+function makeAgent(id: string): Agent {
   return {
-    id: crypto.randomUUID(),
-    name: role,
+    id,
+    name: id,
     description: "",
     instructions: "",
     status: "ready",
-    workspacePath: `/tmp/${role}`,
+    workspacePath: `/tmp/${id}`,
     codexThreadId: null,
     lastError: null,
-    role,
+    role: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (check()) return;
@@ -49,12 +50,12 @@ async function waitUntil(check: () => boolean, timeoutMs = 3000): Promise<void> 
   throw new Error("waitUntil timed out");
 }
 
-describe("HTTP boundary: coordination routes", () => {
+describe("HTTP: task-server routes", () => {
   let dir: string;
   let store: JsonStore;
   let taskStore: TaskStore;
-  let versionStore: InMemoryVersionStore;
   let coordinator: Coordinator;
+  let pushAdapter: NoopPushAdapter;
   let app: Awaited<ReturnType<typeof createApp>>;
 
   beforeEach(async () => {
@@ -72,20 +73,11 @@ describe("HTTP boundary: coordination routes", () => {
     const service = new AgentService(config, store, workspaces, fakeRunner);
     await service.initialize();
     taskStore = new TaskStore(store);
-    versionStore = new InMemoryVersionStore();
-    coordinator = new Coordinator({
-      store,
-      taskStore,
-      versionStore,
-      executor: {
-        async execute({ task }) {
-          return { runId: `run-${task.id}`, writtenPaths: task.intent.writes };
-        },
-      },
-    });
-    // Seed one agent per role.
+    const fileStore = new InMemoryFileStore();
+    pushAdapter = new NoopPushAdapter();
+    coordinator = new Coordinator({ store, taskStore, fileStore, pushAdapter });
     await store.mutate((db) => {
-      db.agents.push(makeAgent("frontend"), makeAgent("backend"));
+      db.agents.push(makeAgent("a1"), makeAgent("a2"));
     });
     app = await createApp(config, service, coordinator, taskStore);
   });
@@ -95,45 +87,45 @@ describe("HTTP boundary: coordination routes", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("accepts a valid project, executes tasks, exposes state via GET", async () => {
+  it("POST /api/tasks accepts and dispatches", async () => {
     const response = await app.inject({
       method: "POST",
-      url: "/api/projects",
+      url: "/api/tasks",
       payload: {
-        name: "demo",
         tasks: [
-          { id: "t1", title: "Front work", description: "Do frontend", role: "frontend", dependsOn: [], intent: { reads: [], writes: ["ui.ts"] } },
-          { id: "t2", title: "Back work", description: "Do backend", role: "backend", dependsOn: ["t1"], intent: { reads: ["ui.ts"], writes: ["api.ts"] } },
+          { id: "t1", detail: "front", owner: "a1", depends_on: [], writes: ["ui.ts"] },
+          { id: "t2", detail: "back", owner: "a2", depends_on: ["t1"], writes: ["api.ts"] },
         ],
       },
     });
     expect(response.statusCode).toBe(201);
-    const body = response.json() as { project: { id: string } };
-    const projectId = body.project.id;
-
-    await waitUntil(() =>
-      store.snapshot().tasks.every((t) => t.state === "completed"),
-    );
-
-    const get = await app.inject({ method: "GET", url: `/api/projects/${projectId}` });
-    expect(get.statusCode).toBe(200);
-    const detail = get.json() as { tasks: Array<{ state: string }> };
-    expect(detail.tasks.every((t) => t.state === "completed")).toBe(true);
+    await waitUntil(() => pushAdapter.sent.length === 1);
+    expect(pushAdapter.sent[0]).toEqual({ taskId: "t1", ownerId: "a1" });
   });
 
-  it("rejects a cyclic DAG with 400", async () => {
+  it("GET /api/tasks returns the persisted list", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      payload: { tasks: [{ id: "t1", detail: "d", owner: "a1", depends_on: [], writes: [] }] },
+    });
+    const get = await app.inject({ method: "GET", url: "/api/tasks" });
+    expect(get.statusCode).toBe(200);
+    const body = get.json() as { tasks: Array<{ id: string }> };
+    expect(body.tasks.map((t) => t.id)).toContain("t1");
+  });
+
+  it("POST /api/tasks rejects a cyclic DAG with 400", async () => {
     const response = await app.inject({
       method: "POST",
-      url: "/api/projects",
+      url: "/api/tasks",
       payload: {
-        name: "bad",
         tasks: [
-          { id: "a", title: "a", description: "d", role: "frontend", dependsOn: ["b"], intent: { reads: [], writes: [] } },
-          { id: "b", title: "b", description: "d", role: "frontend", dependsOn: ["a"], intent: { reads: [], writes: [] } },
+          { id: "a", detail: "d", owner: "a1", depends_on: ["b"], writes: [] },
+          { id: "b", detail: "d", owner: "a1", depends_on: ["a"], writes: [] },
         ],
       },
     });
     expect(response.statusCode).toBe(400);
   });
-
 });

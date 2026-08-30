@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
@@ -24,6 +23,7 @@ const service = new AgentService(config, store, workspaces, runner, router, {
   ...(config.taskServerAuthToken ? { authToken: config.taskServerAuthToken } : {}),
 });
 await service.initialize();
+
 
 const app = await createApp(config, service, router);
 const taskServer = await createTaskServerApp(config, router);

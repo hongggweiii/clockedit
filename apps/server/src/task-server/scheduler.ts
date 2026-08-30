@@ -1,60 +1,54 @@
-import type { Agent, Task } from "../types.js";
-import { conflictsWithAny } from "./intent-graph.js";
 import type { AgentPool } from "./agent-pool.js";
+import { conflictsWithAny } from "./intent-graph.js";
+import type { InternalTask, TaskState } from "./task.types.js";
 
-export interface DispatchDecision {
-  taskId: string;
-  agent: Agent;
-}
+/**
+ * Pure planner. Given the current task set and an agent-pool idle-check,
+ * decide what transitions to apply this tick.
+ *
+ * Dispatch is owner-targeted: Task.owner is a specific agent id and dispatch
+ * only fires when that agent is idle.
+ */
 
 export interface SchedulerPlan {
-  markReady: string[];
-  dispatch: DispatchDecision[];
+  markUnassigned: string[];
+  dispatch: Array<{ taskId: string; ownerId: string }>;
 }
 
-const INFLIGHT_STATES = new Set<Task["state"]>([
-  "dispatched",
-  "running",
-  "committing",
-]);
+const IN_FLIGHT: TaskState = "assigned";
 
-export function plan(tasks: readonly Task[], agentPool: AgentPool): SchedulerPlan {
-  const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const completed = new Set(tasks.filter((t) => t.state === "completed").map((t) => t.id));
-  const inflight = tasks.filter((t) => INFLIGHT_STATES.has(t.state));
-  const inflightIntents = inflight.map((t) => t.intent);
+export function plan(tasks: readonly InternalTask[], agentPool: AgentPool): SchedulerPlan {
+  const done = new Set(tasks.filter((t) => t.state === "done").map((t) => t.id));
+  const inflight = tasks.filter((t) => t.state === IN_FLIGHT);
+  const inflightWrites: string[][] = inflight.map((t) => t.writes);
 
-  const projectedInflightIntents = [...inflightIntents];
-  const markReady: string[] = [];
+  const sorted = [...tasks].sort((a, b) => a.created_at.localeCompare(b.created_at));
 
-  const readyCandidates = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-
-  for (const task of readyCandidates) {
-    if (task.state !== "pending") continue;
-    const depsMet = task.dependsOn.every((dep) => completed.has(dep));
-    if (!depsMet) continue;
-    if (conflictsWithAny(task.intent, projectedInflightIntents)) continue;
-    // Also prevent scheduling behind an earlier same-file writer that's still pending upstream
-    // (deps already handle the true ordering; this is just about not simultaneously flipping
-    // multiple conflicting pendings to ready in the same tick).
-    if (markReady.some((id) => conflictsWithAny(task.intent, [byId.get(id)!.intent]))) continue;
-    markReady.push(task.id);
-    projectedInflightIntents.push(task.intent);
+  const markUnassigned: string[] = [];
+  for (const task of sorted) {
+    if (task.state !== "blocked") continue;
+    if (!task.depends_on.every((dep) => done.has(dep))) continue;
+    markUnassigned.push(task.id);
   }
 
-  const dispatch: DispatchDecision[] = [];
+  const projectedInflightWrites = [...inflightWrites];
+  const unassignedSet = new Set(markUnassigned);
+  const dispatchable = sorted.filter(
+    (t) => t.state === "unassigned" || unassignedSet.has(t.id),
+  );
+
+  const dispatch: Array<{ taskId: string; ownerId: string }> = [];
   const reservedAgents = new Set<string>();
-  const readySet = new Set(markReady);
-  const dispatchable = tasks
-    .filter((t) => t.state === "ready" || readySet.has(t.id))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   for (const task of dispatchable) {
-    const agent = agentPool.pickIdle(task.role, reservedAgents);
-    if (!agent) continue;
-    reservedAgents.add(agent.id);
-    dispatch.push({ taskId: task.id, agent });
+    if (!task.owner) continue;
+    if (reservedAgents.has(task.owner)) continue;
+    if (!agentPool.isIdle(task.owner)) continue;
+    if (conflictsWithAny(task.writes, projectedInflightWrites)) continue;
+    dispatch.push({ taskId: task.id, ownerId: task.owner });
+    reservedAgents.add(task.owner);
+    projectedInflightWrites.push(task.writes);
   }
 
-  return { markReady, dispatch };
+  return { markUnassigned, dispatch };
 }

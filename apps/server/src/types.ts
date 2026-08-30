@@ -57,9 +57,10 @@ export type TaskState =
   | "committing"
   | "completed"
   | "conflict"
+  | "frozen"
   | "failed";
 
-export type ProjectState = "active" | "completed" | "failed";
+export type ProjectState = "active" | "completed" | "frozen";
 
 export interface TaskIntent {
   reads: string[];
@@ -99,15 +100,10 @@ export interface Database {
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
-<<<<<<< HEAD
   files: Record<string, StoredFile>;
   reads: Record<string, Record<string, number>>;
   events: StoredEvent[];
   eventSeq: number;
-=======
-  projects: Project[];
-  tasks: Task[];
->>>>>>> afc78d9 (Implement server logic for multi-agent coordination)
 }
 
 export interface CreateAgentInput {

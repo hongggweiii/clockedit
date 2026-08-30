@@ -1,81 +1,92 @@
-export interface VersionStoreCommitInput {
-  projectId: string;
-  agentId: string;
-  taskId: string;
-  expectedVersions: Record<string, string>;
-  writtenPaths: string[];
-}
+import type { FileRef, FileWrite } from "../storage/file-store.types.js";
 
-export type VersionStoreCommitResult =
-  | { ok: true; newVersions: Record<string, string> }
-  | { ok: false; conflictedPaths: string[] };
+/**
+ * FileStore is the interface my task-server consumes for the "source of
+ * truth" file JSONStore. The file-versioning teammate implements it for
+ * real; this file also ships an in-memory mock used by tests and MVP.
+ *
+ * Versions are non-negative integers (matches the shared file schemas).
+ */
+export interface FileStore {
+  /** Return current head versions + contents for the given paths (missing → omitted). */
+  fetch(paths: readonly string[]): Promise<Array<{ path: string; version: number; content: string }>>;
 
-export interface VersionStore {
-  head(projectId: string, paths: string[]): Promise<Record<string, string>>;
-  commit(input: VersionStoreCommitInput): Promise<VersionStoreCommitResult>;
+  /**
+   * Atomic all-or-nothing commit.
+   * - Every read's `version` must equal current head.
+   * - Every write's `based_on` must equal current head (or null for new files).
+   * If any check fails, return { ok: false, conflictedPaths } and DO NOT apply.
+   */
+  commit(input: {
+    agentId: string;
+    taskId: string;
+    reads: readonly FileRef[];
+    writes: readonly FileWrite[];
+  }): Promise<
+    | { ok: true; newVersions: Record<string, number> }
+    | { ok: false; conflictedPaths: string[] }
+  >;
 }
 
 interface FileState {
-  version: string;
+  version: number;
+  content: string;
   lastWriter: string | null;
 }
 
-export class InMemoryVersionStore implements VersionStore {
-  private counters = new Map<string, number>();
+export class InMemoryFileStore implements FileStore {
   private files = new Map<string, FileState>();
 
-  private key(projectId: string, path: string): string {
-    return `${projectId}:${path}`;
-  }
-
-  private nextVersion(projectId: string, path: string): string {
-    const key = this.key(projectId, path);
-    const next = (this.counters.get(key) ?? 0) + 1;
-    this.counters.set(key, next);
-    return `v${next}`;
-  }
-
-  async head(projectId: string, paths: string[]): Promise<Record<string, string>> {
-    const result: Record<string, string> = {};
+  async fetch(paths: readonly string[]): Promise<Array<{ path: string; version: number; content: string }>> {
+    const out: Array<{ path: string; version: number; content: string }> = [];
     for (const path of paths) {
-      const state = this.files.get(this.key(projectId, path));
-      if (state) result[path] = state.version;
+      const state = this.files.get(path);
+      if (state) out.push({ path, version: state.version, content: state.content });
     }
-    return result;
+    return out;
   }
 
-  async commit(input: VersionStoreCommitInput): Promise<VersionStoreCommitResult> {
+  async commit(input: {
+    agentId: string;
+    taskId: string;
+    reads: readonly FileRef[];
+    writes: readonly FileWrite[];
+  }): Promise<
+    | { ok: true; newVersions: Record<string, number> }
+    | { ok: false; conflictedPaths: string[] }
+  > {
     const conflicts: string[] = [];
-    for (const [path, expected] of Object.entries(input.expectedVersions)) {
-      const state = this.files.get(this.key(input.projectId, path));
-      const current = state?.version ?? null;
-      if ((current ?? null) !== (expected ?? null)) {
-        conflicts.push(path);
-      }
+    for (const read of input.reads) {
+      const current = this.files.get(read.path)?.version ?? -1;
+      if (current !== read.version) conflicts.push(read.path);
     }
-    for (const path of input.writtenPaths) {
-      if (input.expectedVersions[path] !== undefined) continue;
-      const state = this.files.get(this.key(input.projectId, path));
-      if (state && state.lastWriter !== input.agentId) conflicts.push(path);
+    for (const write of input.writes) {
+      const current = this.files.get(write.path)?.version ?? null;
+      if (current !== write.based_on) conflicts.push(write.path);
     }
-    if (conflicts.length > 0) return { ok: false, conflictedPaths: conflicts };
+    if (conflicts.length > 0) return { ok: false, conflictedPaths: [...new Set(conflicts)] };
 
-    const newVersions: Record<string, string> = {};
-    for (const path of input.writtenPaths) {
-      const version = this.nextVersion(input.projectId, path);
-      this.files.set(this.key(input.projectId, path), {
-        version,
+    const newVersions: Record<string, number> = {};
+    for (const write of input.writes) {
+      const nextVersion = (this.files.get(write.path)?.version ?? -1) + 1;
+      this.files.set(write.path, {
+        version: nextVersion,
+        content: write.content,
         lastWriter: input.agentId,
       });
-      newVersions[path] = version;
+      newVersions[write.path] = nextVersion;
     }
     return { ok: true, newVersions };
   }
 
-  // Test helper: force a version bump for a file, simulating an external writer.
-  forceBump(projectId: string, path: string, writer = "external"): string {
-    const version = this.nextVersion(projectId, path);
-    this.files.set(this.key(projectId, path), { version, lastWriter: writer });
-    return version;
+  // Test helper: raise a file's head version without going through commit.
+  forceBump(path: string, content = "", writer = "external"): number {
+    const next = (this.files.get(path)?.version ?? -1) + 1;
+    this.files.set(path, { version: next, content, lastWriter: writer });
+    return next;
+  }
+
+  headVersion(path: string): number | null {
+    return this.files.get(path)?.version ?? null;
   }
 }

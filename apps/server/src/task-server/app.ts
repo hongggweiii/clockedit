@@ -24,6 +24,9 @@ export async function createTaskServerApp(
     if (!valid) return reply.code(401).send({ error: "Authentication required" });
   });
   app.get("/health", async () => ({ ok: true, service: "task-server" }));
+  app.get("/tasks", async () => ({
+    tasks: await router.getTasks(),
+  }));
   app.post("/messages", async (request, reply) => {
     const response = await router.handleMessage(request.body);
     return response;

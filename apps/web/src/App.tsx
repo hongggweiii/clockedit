@@ -68,6 +68,7 @@ export default function App() {
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const pollingRunIds = useRef(new Set<string>());
+  const pollingEventsRef = useRef(false);
   const lastSeqRef = useRef<number>(0);
   selectedIdRef.current = selectedId;
 
@@ -124,118 +125,37 @@ export default function App() {
   }, []);
 
   const refreshOrchestrator = useCallback(async () => {
+    if (pollingEventsRef.current) return;
+    pollingEventsRef.current = true;
     try {
-      // 1. Fetch Task Matrix
-      const tasksRes = await api.tasks().catch(() => ({ tasks: [] }));
-      if (tasksRes.tasks && tasksRes.tasks.length > 0) {
+      // Task view is retained for the future /api/tasks backend endpoint.
+      const tasksRes = await api.tasks().catch(() => null);
+      if (tasksRes?.tasks.length) {
         setTasks(tasksRes.tasks);
       } else {
-        // Fallback mock tasks for UI demonstration
-        setTasks((prev) =>
-          prev.length > 0
-            ? prev
+        setTasks((current) =>
+          current.length > 0
+            ? current
             : [
-                {
-                  id: "task-001",
-                  state: "done",
-                  owner: "agent-parser",
-                  depends_on: [],
-                  writes: ["src/parser.py"],
-                  strikes: 0,
-                },
-                {
-                  id: "task-002",
-                  state: "assigned",
-                  owner: "agent-builder",
-                  depends_on: ["task-001"],
-                  writes: ["src/engine.ts", "package.json"],
-                  strikes: 1,
-                },
-                {
-                  id: "task-003",
-                  state: "escalated",
-                  owner: "agent-tester",
-                  depends_on: ["task-002"],
-                  writes: ["tests/suite.test.ts"],
-                  strikes: 3,
-                },
-                {
-                  id: "task-004",
-                  state: "blocked",
-                  owner: "agent-deployer",
-                  depends_on: ["task-003"],
-                  writes: ["deploy/manifest.yaml"],
-                  strikes: 0,
-                },
+                { id: "task-001", detail: "Parse source data", state: "done", owner: "agent-parser", depends_on: [], writes: ["src/parser.py"], strikes: 0 },
+                { id: "task-002", detail: "Build processing engine", state: "assigned", owner: "agent-builder", depends_on: ["task-001"], writes: ["src/engine.ts", "package.json"], strikes: 1 },
+                { id: "task-003", detail: "Run the test suite", state: "escalated", owner: "agent-tester", depends_on: ["task-002"], writes: ["tests/suite.test.ts"], strikes: 3 },
+                { id: "task-004", detail: "Deploy the application", state: "blocked", owner: "agent-deployer", depends_on: ["task-003"], writes: ["deploy/manifest.yaml"], strikes: 0 },
               ],
         );
       }
 
-      // 2. Fetch incremental events via ?after=seq
-      const eventsRes = await api.events(lastSeqRef.current).catch(() => ({ events: [] }));
+      // Fetch incremental events using the BFF sequence cursor.
+      const eventsRes = await api.events(lastSeqRef.current);
       if (eventsRes.events && eventsRes.events.length > 0) {
         const nextEvents = eventsRes.events;
-        lastSeqRef.current = nextEvents[nextEvents.length - 1].seq;
+        lastSeqRef.current = Math.max(...nextEvents.map((event) => event.seq));
         setEvents((current) => [...current, ...nextEvents].slice(-100));
-      } else {
-        // Fallback mock events for initial preview
-        setEvents((prev) =>
-          prev.length > 0
-            ? prev
-            : [
-                {
-                  seq: 1,
-                  at: new Date().toISOString(),
-                  type: "request",
-                  msg_id: "m-1",
-                  agent: "agent-parser",
-                  task_id: "task-001",
-                  payload: {
-                    body: {
-                      kind: "fetch",
-                      paths: ["src/parser.py"],
-                    },
-                  },
-                },
-                {
-                  seq: 2,
-                  at: new Date().toISOString(),
-                  type: "response",
-                  msg_id: "m-2",
-                  agent: "agent-parser",
-                  task_id: "task-001",
-                  payload: {
-                    ok: true,
-                    kind: "commit_ok",
-                  },
-                },
-                {
-                  seq: 3,
-                  at: new Date().toISOString(),
-                  type: "response",
-                  msg_id: "m-3",
-                  agent: "agent-builder",
-                  task_id: "task-002",
-                  payload: {
-                    ok: false,
-                    code: "OCC_CONFLICT",
-                    kind: "commit_rejected",
-                  },
-                },
-                {
-                  seq: 4,
-                  at: new Date().toISOString(),
-                  type: "error",
-                  msg_id: "m-4",
-                  agent: "agent-tester",
-                  task_id: "task-003",
-                  error: "Max retries (3 strikes) exceeded. Task escalated.",
-                },
-              ],
-        );
       }
     } catch {
-      // Graceful error capture
+      // Keep the last received events when the BFF is temporarily unavailable.
+    } finally {
+      pollingEventsRef.current = false;
     }
   }, []);
 
@@ -597,15 +517,15 @@ export default function App() {
               </div>
               <div className="occ-stat-card">
                 <span className="eyebrow">Assigned / Running</span>
-                <strong className="text-blue">{tasks.filter((t) => t.state === "assigned").length}</strong>
+                <strong className="text-blue">{tasks.filter((task) => task.state === "assigned").length}</strong>
               </div>
               <div className="occ-stat-card">
                 <span className="eyebrow">Escalated (Intervention)</span>
-                <strong className="text-red">{tasks.filter((t) => t.state === "escalated").length}</strong>
+                <strong className="text-red">{tasks.filter((task) => task.state === "escalated").length}</strong>
               </div>
               <div className="occ-stat-card">
                 <span className="eyebrow">Completed</span>
-                <strong className="text-green">{tasks.filter((t) => t.state === "done").length}</strong>
+                <strong className="text-green">{tasks.filter((task) => task.state === "done").length}</strong>
               </div>
             </div>
 
@@ -639,49 +559,26 @@ export default function App() {
                         </tr>
                       ) : (
                         tasks.map((task) => (
-                          <tr
-                            key={task.id}
-                            className={task.state === "escalated" ? "row-escalated" : ""}
-                          >
+                          <tr key={task.id} className={task.state === "escalated" ? "row-escalated" : ""}>
                             <td className="font-mono font-bold">{task.id}</td>
-                            <td>
-                              <span className={`task-badge badge-${task.state}`}>
-                                {task.state}
-                              </span>
-                            </td>
-                            <td className="font-mono">{task.owner}</td>
+                            <td><span className={`task-badge badge-${task.state}`}>{task.state}</span></td>
+                            <td className="font-mono">{task.owner ?? "Unassigned"}</td>
                             <td>
                               {task.depends_on.length > 0 ? (
                                 <div className="tag-group">
-                                  {task.depends_on.map((dep) => (
-                                    <span key={dep} className="code-tag">
-                                      {dep}
-                                    </span>
-                                  ))}
+                                  {task.depends_on.map((dependency) => <span key={dependency} className="code-tag">{dependency}</span>)}
                                 </div>
-                              ) : (
-                                <span className="muted-text">None</span>
-                              )}
+                              ) : <span className="muted-text">None</span>}
                             </td>
                             <td>
                               {task.writes.length > 0 ? (
                                 <div className="tag-group">
-                                  {task.writes.map((file) => (
-                                    <span key={file} className="code-tag-amber">
-                                      {file}
-                                    </span>
-                                  ))}
+                                  {task.writes.map((file) => <span key={file} className="code-tag-amber">{file}</span>)}
                                 </div>
-                              ) : (
-                                <span className="muted-text">No target writes</span>
-                              )}
+                              ) : <span className="muted-text">No target writes</span>}
                             </td>
                             <td>
-                              <span
-                                className={`strikes-badge ${
-                                  task.strikes > 0 ? "has-strikes" : ""
-                                }`}
-                              >
+                              <span className={`strikes-badge ${task.strikes > 0 ? "has-strikes" : ""}`}>
                                 {task.strikes}/3
                               </span>
                             </td>

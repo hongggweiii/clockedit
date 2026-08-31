@@ -50,37 +50,49 @@ export interface SystemInfo {
   runtime: string;
 }
 
-export type TaskState = "blocked" | "assigned" | "escalated" | "done";
+export type TaskState = "unassigned" | "blocked" | "assigned" | "escalated" | "done";
 
 export interface Task {
   id: string;
+  detail: string;
   state: TaskState;
-  owner: string; // agent running this task
+  owner: string | null;
   depends_on: string[];
   writes: string[];
-  strikes: number; // 0..3, then escalated
+  strikes: number;
 }
 
 export interface SystemEvent {
   seq: number;
   at: string;
   type: EventType;
-  msg_id: string;
+  msg_id: string | null;
   agent: string;
   task_id: string | null;
-  payload?: {
-    ok?: boolean;
-    kind?: string;
-    body?: {
-      kind?: string;
-      paths?: string[];
-      writes?: Array<{ path: string; content: string; based_on: number | null }>;
-      reads?: Array<{ path: string; version: number }>;
-    };
-    files?: unknown[];
-    versions?: Record<string, number>;
-    code?: string;
-    moved?: Array<{ path: string; had: number; now: number }>;
-  };
+  payload?: EventPayload;
   error?: string;
+}
+
+export interface EventPayload {
+  msg_id?: string;
+  agent?: string;
+  task_id?: string | null;
+  body?: {
+    kind: string;
+    paths?: string[];
+    writes?: Array<{
+      path: string;
+      content: string;
+      based_on: number | null;
+      delete?: boolean;
+    }>;
+    reads?: Array<{ path: string; version: number }>;
+  };
+  ok?: boolean;
+  kind?: string;
+  files?: Array<{ path: string; version: number; content?: string }>;
+  new_versions?: Record<string, number>;
+  code?: string;
+  paths?: string[];
+  moved?: Array<{ path: string; had: number; now: number }>;
 }

@@ -101,6 +101,49 @@ Volcengine ECS.
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS
 
+## Demo scenarios
+
+The coordination harness seeds two fake repositories and an empty `qa/`
+workspace. In both scenarios, agents must use `fetch` before reading or editing
+shared files, mark edited files, commit through `agentctl`, and finish with
+`done`. See [docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md) for the command
+workflow.
+
+### Scenario 1: stale-read rejection and recovery
+
+Use this scenario to demonstrate dependency waiting, version checks, and a
+useful failure diagnostic:
+
+1. Seed tasks T1 (backend adds `cancelOrder`), T2 (frontend adds the Cancel
+   button after T1), and T3 (QA checks the contract).
+2. Once T2 is running and its frontend fetch is visible, post T4: backend
+   renames `order_id` to `orderId` in `repoB/src/api/orders.ts`.
+3. Show T2's first commit rejected as `STALE`, identifying that
+   `repoB/src/api/orders.ts` moved from version 2 to version 3.
+4. Show frontend fetching version 3, reapplying the change, and committing
+   successfully; T3 then writes `qa/report.md` with `PASS`.
+
+Expected evidence: `commit_ok`, `commit_rejected` with the moved path and
+versions, a successful retry, and a passing QA report. The rejection is
+meaningful even though frontend writes only `repoA/src/App.tsx` because it read
+the changed backend contract.
+
+### Scenario 2: automatic task creation
+
+Use this scenario to demonstrate agents building the task graph themselves:
+
+1. Seed only T1: backend adds `cancelOrder(id)` to
+   `repoB/src/api/orders.ts`.
+2. After backend commits, it creates T2 for frontend to add the Cancel button
+   in `repoA/src/App.tsx`.
+3. After frontend commits, it creates T3 for QA to compare both repositories
+   and write `qa/report.md`.
+4. Show the final run ending with QA's `PASS` report.
+
+Expected evidence: T1, T2, and T3 are created in sequence by the agents, each
+with the correct owner and write paths, and each created task has an empty
+`depends_on` list because the creating agent has already committed.
+
 ## Requirements
 
 - Node.js 22+

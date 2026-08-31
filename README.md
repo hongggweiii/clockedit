@@ -1,4 +1,4 @@
-# Volc Agent Launchpad
+# ClockedIt
 
 ## Coordination for agent teams
 
@@ -70,37 +70,6 @@ never comes back
 
 ---
 
-A minimal Agent platform for three-day middleware hackathons. It provides Agent
-CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
-Volcengine Ark Responses API.
-
-Run it locally with Docker, Colima, or rootless Podman, or deploy it to
-Volcengine ECS.
-
-> [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
-> credentials. See [SECURITY.md](SECURITY.md).
-
-## Screenshots
-
-### Agent Playground
-
-![Agent Playground showing lifecycle controls, starter prompts, and the Codex Runtime](docs/assets/playground.jpg)
-
-### Create an Agent
-
-![Create Agent form with name, description, and workspace instructions](docs/assets/create-agent.jpg)
-
-## Features
-
-- React and TypeScript Web UI
-- Agent create, edit, start, stop, delete, and multi-turn chat
-- Fastify control plane with asynchronous Run state
-- Persistent Agent workspaces and Codex sessions
-- Disposable Docker, Colima, or Podman container for each local turn
-- Docker and Terraform deployment paths for Volcengine ECS
-
 ## Demo scenarios
 
 The coordination harness seeds two fake repositories and an empty `qa/`
@@ -143,6 +112,311 @@ Use this scenario to demonstrate agents building the task graph themselves:
 Expected evidence: T1, T2, and T3 are created in sequence by the agents, each
 with the correct owner and write paths, and each created task has an empty
 `depends_on` list because the creating agent has already committed.
+
+---
+
+## System architecture
+### 1. System diagram
+
+<div style="max-width: 900px; margin: 0 auto; overflow-x: auto;">
+
+```mermaid
+flowchart TB
+    subgraph PUBLIC["Public zone — HOST:3000 · APP_AUTH_TOKEN"]
+        ui["React web UI"]
+        pub["Public Fastify\napp.ts"]
+        svc["AgentService"]
+    end
+
+    subgraph PRIVATE["Private zone — 127.0.0.1:4000 · TASK_SERVER_AUTH_TOKEN"]
+        priv["Private Fastify\ntask-server/app.ts"]
+        rtr["Router\nzod validate in / out"]
+        crd["Coordinator"]
+        fs["FileStore\natomic OCC commit"]
+        ts["TaskStore"]
+        pure["Pure logic\ndag · scheduler · intent-graph · occ"]
+        js["JsonStore\n.data/launchpad.json"]
+    end
+
+    subgraph CONTAINER["Container zone — disposable sandbox, one per turn"]
+        ctl["agentctl"]
+        st["state.json\nversions · edited"]
+        cdx["Codex CLI"]
+    end
+
+    ui -- "GET /api/tasks" --> pub
+    ui -- "GET /api/*" --> pub
+    ui -- "GET /api/events?after=lastSeq" --> pub
+    pub -- "getTasks" --> rtr
+    pub -- "getEvents" --> rtr
+    rtr -- "routerEvents" --> pub
+    pub --> svc
+    svc -- "spawn container" --> cdx
+    svc -- "GET /events?agent_id=..." --> priv
+    priv -- "SSE connection established" --> svc
+    priv -- "SSE data event / Queue message" --> svc
+
+    ctl -- "POST /messages" --> priv
+    priv -- "parse" --> rtr
+    rtr -- "handleMessage" --> crd
+    rtr -- "listTasks" --> crd
+    crd -- "dispatch task" --> rtr
+    crd -- "Response" --> rtr
+    rtr -. "Emit Request Event" .-> rtr
+    rtr -. "Emit Response Event" .-> rtr
+    rtr -- "SseAgentChannel.send()" --> priv
+    rtr -- "Response" --> priv
+    priv -- "Response" --> ctl
+
+    crd --> pure
+    crd --> ts
+    crd --> fs
+    ts -- "store.mutate" --> js
+    fs -- "store.mutate" --> js
+
+    cdx -- "shell commands" --> ctl
+    ctl --> st
+```
+
+</div>
+
+### 2 · Optimistic concurrency control path
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+flowchart TD
+    f1["agentctl fetch"] --> f2["FileStore.fetch\nrecords read version"]
+    f2 --> f3["Codex edits locally\nagentctl mark-edited"]
+    f3 --> f4["agentctl commit\nwrites[based_on] + reads[]"]
+    f4 --> f5["evaluateCommit\ninside store.mutate"]
+    f5 --> d1{"any version moved?"}
+    d1 -- no --> ok(["commit_ok\nversions bumped, reads cleared"])
+    d1 -- yes --> d2{"strikes < 3 ?"}
+    d2 -- yes --> rt["retry\nSTALE + moved[]"]
+    d2 -- no --> dr(["dropped\nterminal"])
+    rt -- "agent refetches, retries" --> f4
+```
+
+</div>
+
+### 3 · Task state machine
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+stateDiagram-v2
+    [*] --> created
+    created --> blocked: depends_on > 0
+    created --> unassigned: no deps
+    blocked --> unassigned: deps met
+    unassigned --> assigned: owner idle, no write clash
+    assigned --> assigned: commit conflict, strikes < 3
+    assigned --> dropped: strikes = 3
+    assigned --> done: agent sent done
+    dropped --> [*]
+    done --> [*]
+```
+
+</div>
+
+### 4 · Task dispatch and push path
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+flowchart TD
+    t1["submitTasks / onCreateTasks"] --> t2["validateDag\ncycles · dups · unknown deps"]
+    t2 --> t3["taskStore.createMany"]
+    t3 --> t4["scheduler.plan\nidle owner + intent graph"]
+    t4 --> t5["setState('assigned')"]
+    t5 --> t6["SseBroadcastAdapter\ntask_assigned on GET /events"]
+    t6 --> t7["AgentService.sendMessage\nspawns Codex with prompt"]
+    t6 -- "push throws" --> er["revert to unassigned\nre-dispatch next tick"]
+```
+
+</div>
+
+### 5 · agent request / reply path
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+sequenceDiagram
+    participant l1 as Codex CLI
+    participant l2 as agentctl
+    participant l3 as task-server/app.ts
+    participant l4 as Router
+    participant l5 as Coordinator
+    participant l6 as FileStore + JsonStore
+
+    l1->>l2: agentctl commit
+    l2->>l3: POST /messages · bearer
+    l3->>l4: handleMessage(body)
+    l4->>l4: envelopeSchema.parse
+    l4->>l5: onCommit(agent, tid, req)
+    l5->>l6: FileStore.commit(writes, reads)
+    l6->>l6: store.mutate — check + apply
+    l6-->>l5: CommitResult
+    l5-->>l4: { ok, kind: 'committed' }
+    l4->>l4: responseSchema.parse
+    l4-->>l3: validated response
+    l3-->>l2: HTTP 200
+    l2-->>l1: JSON on stdout
+```
+
+</div>
+
+### 6 · Serialization model — single writer
+
+Concurrent callers (Node event loop) all funnel through one FIFO
+promise-chain queue, so only one mutation is ever in its critical section at
+a time.
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+flowchart TD
+    subgraph CONCURRENT["Concurrent — Node event loop"]
+        r1["agent A · commit"]
+        r2["agent B · commit"]
+        r3["agent C · fetch"]
+    end
+
+    q["JsonStore.mutate\npromise-chain queue, FIFO, one at a time"]
+
+    subgraph CRITICAL["Critical section — one mutation at a time"]
+        c1["snapshot db"]
+        c2["mutate\nclone → OCC check → apply"]
+        c3["write temp file + rename"]
+    end
+
+    db[(".data/launchpad.json")]
+
+    r1 --> q
+    r2 --> q
+    r3 --> q
+    q -- "dequeue" --> c1
+    c1 --> c2
+    c2 --> c3
+    c3 -- "atomic, never torn" --> db
+```
+
+</div>
+
+> **Invariant:** check and apply share one `mutate` block, so no commit
+> observes a version it did not act on.
+
+### 7 · Agent Channel for SSE
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+sequenceDiagram
+    participant AR as Agent runtime
+    participant AS as AgentService
+    participant TS as Task-server HTTP
+    participant R as Router
+    participant C as Coordinator
+    participant CR as Codex Runner
+
+    AR->>AS: create/start agent
+    AS->>TS: GET /events?agent_id=... (Bearer token)
+    TS->>R: registerAgent(agentId, SseAgentChannel)
+    TS-->>AS: SSE connection established
+
+    AR->>AS: POST /messages (coordination request)
+    AS->>TS: handleMessage(envelope)
+    TS->>C: fetch / commit / done
+    C-->>TS: validated response
+    TS-->>AS: HTTP response
+    AS-->>AR: coordination response
+
+    C->>R: dispatch(agentId, response)
+    R->>TS: SseAgentChannel.send(response)
+    TS-->>AS: SSE data event
+    AS->>AS: queue dispatched message
+
+    AS->>CR: start agent run
+    CR-->>AS: completed response
+    TS--xAS: connection closes
+    AS->>TS: reconnect with backoff
+```
+
+</div>
+
+### 8 · Frontend Events
+
+<div style="max-width: 450px; max-height:500px; margin: 0 auto; overflow-x: auto; overflow-y: auto;">
+
+```mermaid
+sequenceDiagram
+    participant A as Agent / agentctl
+    participant B as Backend API
+    participant R as Router
+    participant F as Frontend Audit Stream
+
+    A->>B: POST /messages
+    B->>R: handleMessage(envelope)
+    R->>R: Emit request event
+    R->>R: Route request to coordinator
+    R->>R: Emit response event
+    R-->>B: Response
+    B-->>A: HTTP response
+
+    loop Every ~1 second
+        F->>B: GET /api/events?after=lastSeq
+        B->>R: getEvents(after)
+        R-->>B: Events after cursor
+        B-->>F: { events: [...] }
+        F->>F: Append events to audit stream
+        F->>F: Update lastSeq
+    end
+
+    alt Request fails
+        R->>R: Emit error event
+        F->>B: Next poll with updated cursor
+        B-->>F: Error event
+        F->>F: Display error in audit stream
+    end
+```
+
+</div>
+
+---
+
+A minimal Agent platform for three-day middleware hackathons. It provides Agent
+CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
+Volcengine Ark Responses API.
+
+Run it locally with Docker, Colima, or rootless Podman, or deploy it to
+Volcengine ECS.
+
+> [!WARNING]
+> This is a single-user proof of concept. It intentionally has no identity,
+> tracing, audit, or hardened sandbox middleware. Do not use production data or
+> credentials. See [SECURITY.md](SECURITY.md).
+
+## Screenshots
+
+### Agent Playground
+
+![Agent Playground showing lifecycle controls, starter prompts, and the Codex Runtime](docs/assets/multi-agent-coordination.png)
+
+### Create an Agent
+
+![Create Agent form with name, description, and workspace instructions](docs/assets/create-agent.jpg)
+
+## Features
+
+- React and TypeScript Web UI
+- Agent create, edit, start, stop, delete, and multi-turn chat
+- Fastify control plane with asynchronous Run state
+- Persistent Agent workspaces and Codex sessions
+- Disposable Docker, Colima, or Podman container for each local turn
+- Docker and Terraform deployment paths for Volcengine ECS
+
+---
 
 ## Requirements
 
@@ -325,6 +599,8 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 
 ## How it works
 
+<div style="max-width: 900px; margin: 0 auto; overflow-x: auto;">
+
 ```mermaid
 flowchart LR
     UI["React Web UI"] --> API["Fastify control plane"]
@@ -335,6 +611,8 @@ flowchart LR
     Container --> Ark["Volcengine Ark Responses API"]
     Codex --> Ark
 ```
+
+</div>
 
 The first turn uses `codex exec`; later turns resume the stored Codex thread.
 Deleting an Agent archives its workspace under `workspaces/.deleted/`.

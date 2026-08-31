@@ -1,6 +1,13 @@
 import type { InternalTask, Task } from "./task.types.js";
 import type { PushAdapter } from "./push-adapter.js";
-import type { ServerEvent } from "../router/schemas/events.schemas.js";
+
+/**
+ * Server → agent events, delivered over SSE. Discriminated by `kind` so the
+ * union can grow (task_dropped, task_cancelled, etc.) without breaking
+ * existing subscribers.
+ */
+export type ServerEvent =
+  | { kind: "task_assigned"; task: Task };
 
 export type EventListener = (event: ServerEvent) => void;
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SseBroadcastAdapter } from "./sse-broadcast-adapter.js";
-import type { ServerEvent } from "../router/schemas/events.schemas.js";
+import { SseBroadcastAdapter, type ServerEvent } from "./sse-broadcast-adapter.js";
 import type { InternalTask } from "./task.types.js";
 
 function makeTask(overrides: Partial<InternalTask> = {}): InternalTask {

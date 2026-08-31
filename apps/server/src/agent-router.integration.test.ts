@@ -93,7 +93,7 @@ describe("agent coordination lifecycle", () => {
         { cwd: agent.workspacePath, env: commandEnvironment },
       );
 
-      const profiles = await runCtl("list-agent");
+      const profiles = await runCtl("list-agents");
       expect(JSON.parse(profiles.stdout)).toEqual({
         ok: true,
         kind: "agent_profiles",

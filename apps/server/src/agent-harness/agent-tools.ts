@@ -74,10 +74,15 @@ export function coordinationEnvironment(
 }
 
 export function coordinationContainerEnvArgs(request: RunnerRequest): string[] {
-  return Object.keys(coordinationEnvironment(request)).flatMap((name) => [
-    "--env",
-    name,
-  ]);
+  const environment = coordinationEnvironment(request);
+  return Object.entries(environment).flatMap(([name, value]) => {
+    // Keep the token out of argv. The runner passes it through the Docker
+    // process environment, while the non-secret values are made explicit so
+    // they do not depend on the parent shell exporting application config.
+    return name === "COORDINATION_AUTH_TOKEN"
+      ? ["--env", name]
+      : ["--env", `${name}=${value}`];
+  });
 }
 
 export function promptWithCoordinationTools(request: RunnerRequest): string {

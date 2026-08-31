@@ -62,6 +62,10 @@ describe("Agent coordination tools", () => {
     });
     const args = coordinationContainerEnvArgs(request);
     expect(args).toContain("COORDINATION_AUTH_TOKEN");
+    expect(args).toContain("COORDINATION_BASE_URL=http://coordination.test:3000");
+    expect(args).toContain("COORDINATION_PROJECT_ID=cancel-order");
+    expect(args).toContain("COORDINATION_AGENT_ID=frontend");
+    expect(args).toContain("COORDINATION_TASK_ID=frontend-button");
     expect(args).not.toContain("test-token");
   });
 

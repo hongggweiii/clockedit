@@ -49,7 +49,7 @@ pushAdapter.subscribe((event) => {
   const { task } = event;
   if (!task.owner) return;
   void service
-    .sendMessage(task.owner, buildTaskPrompt(task))
+    .sendMessage(task.owner, buildTaskPrompt(task), task.id)
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[dispatch] task=${task.id} owner=${task.owner} failed: ${message}`);

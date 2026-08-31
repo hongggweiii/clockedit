@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
-import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
+import type {
+  AgentRunner,
+  CoordinationContext,
+  RunnerRequest,
+  RunnerResult,
+} from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import { Router } from "./router/router.js";
 
@@ -36,7 +41,11 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner(), router?: Router): Promise<AgentService> {
+async function makeService(
+  runner: AgentRunner = new FakeRunner(),
+  router?: Router,
+  coordination?: CoordinationContext,
+): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -53,6 +62,7 @@ async function makeService(runner: AgentRunner = new FakeRunner(), router?: Rout
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
     router,
+    coordination,
   );
   await service.initialize();
   return service;
@@ -99,6 +109,62 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+  });
+
+  it("keeps coordination enabled for ordinary playground messages", async () => {
+    let received: RunnerRequest | undefined;
+    const runner: AgentRunner = {
+      run: async (request) => {
+        received = request;
+        return { output: "done", threadId: null, usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    };
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(runner, router, {
+      baseUrl: "http://127.0.0.1:4000",
+      projectId: "default",
+      taskId: null,
+    });
+    const agent = await service.createAgent({ name: "Playground" });
+
+    const { run } = await service.sendMessage(agent.id, "say hello");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+
+    expect(received?.coordination).toMatchObject({
+      baseUrl: "http://127.0.0.1:4000",
+      projectId: "default",
+      taskId: null,
+    });
+  });
+
+  it("adds task-specific coordination only for dispatched tasks", async () => {
+    let received: RunnerRequest | undefined;
+    const runner: AgentRunner = {
+      run: async (request) => {
+        received = request;
+        return { output: "done", threadId: null, usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    };
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(runner, router, {
+      baseUrl: "http://127.0.0.1:4000",
+      projectId: "default",
+      taskId: null,
+    });
+    const agent = await service.createAgent({ name: "Worker" });
+
+    const { run } = await service.sendMessage(agent.id, "do task", "task-123");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+
+    expect(received?.coordination).toMatchObject({
+      baseUrl: "http://127.0.0.1:4000",
+      projectId: "default",
+      taskId: "task-123",
+    });
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

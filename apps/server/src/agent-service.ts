@@ -168,6 +168,7 @@ export class AgentService {
   async sendMessage(
     agentId: string,
     prompt: string,
+    taskId?: string,
   ): Promise<{ run: AgentRun; message: Message }> {
     if (!isArkConfigured(this.config)) {
       throw new HttpError(
@@ -216,7 +217,7 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run);
+    const execution = this.executeRun(agentAtStart, run, taskId);
     this.activeExecutions.set(agentId, execution);
     void execution
       .finally(() => {
@@ -247,7 +248,11 @@ export class AgentService {
     };
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+    taskId?: string,
+  ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
@@ -264,7 +269,9 @@ export class AgentService {
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
-        ...(this.coordination ? { coordination: this.coordination } : {}),
+        ...(this.coordination
+          ? { coordination: { ...this.coordination, taskId: taskId ?? this.coordination.taskId } }
+          : {}),
       });
       const completedAt = now();
       await this.store.mutate((database) => {

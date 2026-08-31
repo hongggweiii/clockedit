@@ -7,20 +7,18 @@
 When several coding agents work on the same codebase at once, nothing keeps them
 out of each other's way:
 As such, agents typically work in separate worktrees as there is no mechanism to coordinate concurrent changes or prevent overlapping work.
-- two agents edit the same file and one overwrites the other
-- the backend changes what an endpoint returns, the frontend keeps building
-against the old shape
-- an agent dies mid-task and everything waiting on it stops
+Some persisting issues include:
+- Two agents edit the same file, and one change may overwrite the other or produce a merge conflict. Git can detect some textual write conflicts, but it does not prevent an agent from committing based on an outdated version.
+- The backend changes an endpoint’s response shape while the frontend continues building against the old contract. Because the agents may modify different files—or even work in different repositories—Git sees no conflict, even though the resulting code is incompatible. The server fixes this by recording every file an agent reads and rejecting the commit if any of those files changed before the commit.
+- An agent may die or fail midway through a task, leaving dependent work blocked indefinitely. The server fixes this by tracking task state, retrying failed tasks, and dropping a task after three unsuccessful attempts so that the queue can continue or the failure can be surfaced explicitly.
 
-Git only catches the first one. Different files in different repos merge cleanly,
-and the code is still broken.
+Git helps identify overlapping changes, but it does not provide coordination, dependency tracking, stale-read detection, or recovery from failed agents.
 
 ### The idea and design
 
-Agents talk to each other through a server, and the server is the only thing
-allowed to change shared state. The server is plain code holding a task queue and a
-versioned file store, not an LLM, so its decisions are deterministic and
-testable.
+This solution enables agents to collaborate by creating and assigning tasks to one another, much like a developer would create tasks for another developer. 
+
+Agents can break work into smaller tasks, delegate dependent or parallel work, and communicate through a task server. The server coordinates task execution and controls all changes to shared state. It is a deterministic and testable server, not an LLM, consisting of a task queue and a versioned file store.
 
 Agents' work is committed through the server and validated with read and write
 versioning at commit time:

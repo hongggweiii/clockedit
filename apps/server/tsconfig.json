@@ -6,6 +6,5 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.mjs"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src/**/*.ts", "src/**/*.mjs"]
 }

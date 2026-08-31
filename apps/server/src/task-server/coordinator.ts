@@ -86,6 +86,11 @@ export class Coordinator implements RouterCoordinator {
     }
   }
 
+  /** Read all persisted tasks (for public polling / UI). */
+  listTasks(): InternalTask[] {
+    return this.taskStore.list();
+  }
+
   /** Submit an initial DAG. Validates cycles + owner existence before persisting. */
   async submitTasks(tasks: readonly NewTask[]): Promise<InternalTask[]> {
     const existingIds = new Set(this.taskStore.list().map((t) => t.id));

@@ -13,7 +13,6 @@ export interface Agent {
   workspacePath: string;
   codexThreadId: string | null;
   lastError: string | null;
-  role: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,14 +67,14 @@ export interface CreateAgentInput {
   name: string;
   description?: string | undefined;
   instructions?: string | undefined;
-  role?: string | undefined;
+  /** Optional deterministic id (used by demo scenario seeding). */
+  id?: string | undefined;
 }
 
 export interface UpdateAgentInput {
   name?: string | undefined;
   description?: string | undefined;
   instructions?: string | undefined;
-  role?: string | null | undefined;
 }
 
 export interface RunnerResult {
@@ -93,7 +92,10 @@ export interface RunnerRequest {
 }
 
 export interface CoordinationContext {
+  /** Host-process URL used for the AgentService SSE loopback. */
   baseUrl: string;
+  /** Optional URL reachable from an isolated Runtime container. */
+  runtimeBaseUrl?: string;
   projectId: string;
   taskId: string | null;
   authToken?: string;

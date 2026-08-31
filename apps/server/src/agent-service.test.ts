@@ -36,7 +36,17 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner(), router?: Router): Promise<AgentService> {
+async function makeService(
+  runner: AgentRunner = new FakeRunner(),
+  router?: Router,
+  coordination?: {
+    baseUrl: string;
+    runtimeBaseUrl?: string;
+    projectId: string;
+    taskId: string | null;
+    authToken?: string;
+  },
+): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -53,6 +63,7 @@ async function makeService(runner: AgentRunner = new FakeRunner(), router?: Rout
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
     router,
+    coordination,
   );
   await service.initialize();
   return service;
@@ -71,23 +82,38 @@ describe("Agent lifecycle", () => {
     expect(service.listAgents()).toHaveLength(0);
   });
 
-  it("registers created agents with the coordination router", async () => {
+  it("exposes created agent profiles to the coordination layer", async () => {
     const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
     const service = await makeService(new FakeRunner(), router);
     const agent = await service.createAgent({ name: "Coordinated" });
 
-    expect(router.hasAgent(agent.id)).toBe(true);
+    expect(service.getAgentProfile(agent.id)).toEqual({ id: agent.id, description: "" });
     await service.deleteAgent(agent.id);
-    expect(router.hasAgent(agent.id)).toBe(false);
+    expect(service.getAgentProfile(agent.id)).toBeNull();
   });
 
-  it("can initialize repeatedly without re-registering agents", async () => {
+  it("rolls back the Agent when its initial SSE connection cannot be established", async () => {
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    const service = await makeService(new FakeRunner(), router, {
+      baseUrl: "http://127.0.0.1:1",
+      projectId: "test",
+      taskId: null,
+    });
+
+    await expect(service.createAgent({ name: "Unavailable" })).rejects.toMatchObject({
+      statusCode: 503,
+      message: expect.stringContaining("SSE connection could not be established"),
+    });
+    expect(service.listAgents()).toEqual([]);
+  });
+
+  it("can initialize repeatedly without changing agent profiles", async () => {
     const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
     const service = await makeService(new FakeRunner(), router);
     const agent = await service.createAgent({ name: "Idempotent" });
 
     await expect(service.initialize()).resolves.toBeUndefined();
-    expect(router.hasAgent(agent.id)).toBe(true);
+    expect(service.getAgentProfile(agent.id)).toEqual({ id: agent.id, description: "" });
   });
 
   it("persists a playground conversation", async () => {
@@ -99,6 +125,28 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+  });
+
+  it("scopes a dispatched run to its task id", async () => {
+    let received: RunnerRequest | undefined;
+    const runner: AgentRunner = {
+      run: async (request) => {
+        received = request;
+        return { output: "done", threadId: "thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    };
+    const service = await makeService(runner, undefined, {
+      baseUrl: "http://127.0.0.1:4000",
+      projectId: "demo",
+      taskId: null,
+    });
+    const agent = await service.createAgent({ name: "Worker" });
+    const { run } = await service.sendMessage(agent.id, "do T1", "T1");
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(received?.coordination?.taskId).toBe("T1");
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

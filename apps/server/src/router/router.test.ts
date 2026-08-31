@@ -10,14 +10,10 @@ const envelope = (body: unknown, task_id: string | null = null) => ({
 
 describe("Router", () => {
   it("requires registration and routes validated fetches", async () => {
-    const coordinator = {
-      onFetch: vi.fn().mockResolvedValue([
-        { path: "a.ts", version: 1, content: "x" },
-        { path: "b.ts", version: 2, content: "y" },
-      ]),
-      onCommit: vi.fn(),
-      onDone: vi.fn(),
-    };
+    const coordinator = { onFetch: vi.fn().mockResolvedValue([
+      { path: "a.ts", version: 1, content: "x" },
+      { path: "b.ts", version: 2, content: "y" },
+    ]), commit: vi.fn(), done: vi.fn() };
     const router = new Router(coordinator);
     await expect(router.handleMessage(envelope({ kind: "fetch", paths: ["a.ts"] }))).rejects.toThrow("not registered");
     router.registerAgent("agent-1", { send: vi.fn() });
@@ -73,6 +69,33 @@ describe("Router", () => {
     router.registerAgent("agent-1", { send });
     await router.dispatch("agent-1", { ok: true, kind: "committed" });
     expect(send).toHaveBeenCalledWith({ ok: true, kind: "committed" });
+  });
+
+  it("dispatches to only the targeted agent's channel (no broadcast)", async () => {
+    const sendA = vi.fn();
+    const sendB = vi.fn();
+    const sendC = vi.fn();
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    router.registerAgent("agent-A", { send: sendA });
+    router.registerAgent("agent-B", { send: sendB });
+    router.registerAgent("agent-C", { send: sendC });
+
+    await router.dispatch("agent-B", { ok: true, kind: "committed" });
+
+    expect(sendB).toHaveBeenCalledTimes(1);
+    expect(sendB).toHaveBeenCalledWith({ ok: true, kind: "committed" });
+    // Isolation: A and C receive nothing.
+    expect(sendA).not.toHaveBeenCalled();
+    expect(sendC).not.toHaveBeenCalled();
+  });
+
+  it("throws when dispatching to an unregistered agent (no silent fan-out)", async () => {
+    const send = vi.fn();
+    const router = new Router({ onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn() });
+    router.registerAgent("agent-A", { send });
+    await expect(router.dispatch("ghost", { ok: true, kind: "committed" })).rejects.toThrow(/not registered/);
+    // The one registered channel is not called either — no broadcast fallback.
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("emits each handled request and response in order", async () => {

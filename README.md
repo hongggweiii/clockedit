@@ -237,11 +237,36 @@ terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
 
+## Monitoring demo output
+
+Use `watch` by itself for the short task-state view:
+
+```bash
+watch -n 1 'curl -s -H "'"$BEARER"'" http://127.0.0.1:3000/api/tasks | jq ".tasks[] | {id, state, owner, strikes}"'
+```
+
+Use a loop that keeps only the latest 20 events for a live activity view:
+
+```bash
+while true; do clear; curl -s -H "$BEARER" http://127.0.0.1:3000/api/events | jq '.events[-20:][] | {seq, type, agent, task_id}'; sleep 1; done
+```
+
+For a scrollable event snapshot, run the request once through `less`:
+
+```bash
+curl -s -H "$BEARER" http://127.0.0.1:3000/api/events | jq '.events[] | {seq, type, agent, task_id}' | less
+```
+
+Do not pipe `watch` into `less`: `watch` emits terminal redraw control codes,
+which appear as `ESC` text and produce jumbled formatting. Use `Ctrl+C` to stop
+the live commands and `q` to exit `less`.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Coordination message protocol](docs/MESSAGE_PROTOCOL.md)
 - [Agent coordination harness](docs/AGENT_HARNESS.md)
+- [Demo scenario 1 (dependency waiting + versioning STALE)](docs/DEMO_SCENARIO_1.md)
 - [Local POC](docs/LOCAL_POC.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)

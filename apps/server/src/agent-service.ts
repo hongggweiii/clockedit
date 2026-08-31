@@ -6,6 +6,7 @@ import { JsonStore } from "./store.js";
 import type {
   Agent,
   AgentRun,
+  AgentProfile,
   AgentRunner,
   CoordinationContext,
   CreateAgentInput,
@@ -14,12 +15,20 @@ import type {
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import type { Router } from "./router/router.js";
+import type { Response as ProtocolResponse } from "./router/router.types.js";
+import { openAgentEvents, type AgentEventsConnection } from "./agent-events.js";
 
 const now = () => new Date().toISOString();
+const reconnectDelay = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
+  private readonly eventConnections = new Map<string, AgentEventsConnection>();
+  private readonly connectionAttempts = new Map<string, Promise<void>>();
+  private readonly connectionStops = new Set<string>();
+  private readonly dispatchQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -48,7 +57,16 @@ export class AgentService {
         }
       }
     });
-    for (const agent of this.store.snapshot().agents) this.registerAgent(agent.id, agent.description);
+  }
+
+  async connectInitializedAgents(): Promise<void> {
+    if (!this.router || !this.coordination) return;
+    const snapshot = this.store.snapshot();
+    await Promise.all(
+      snapshot.agents
+        .filter((agent) => agent.status !== "stopped")
+        .map((agent) => this.ensureAgentConnection(agent)),
+    );
   }
 
   listAgents(): Agent[] {
@@ -65,9 +83,18 @@ export class AgentService {
     return agent;
   }
 
+  getAgentProfile(id: string): AgentProfile | null {
+    const agent = this.store.snapshot().agents.find((item) => item.id === id);
+    return agent ? { id: agent.id, description: agent.description } : null;
+  }
+
   async createAgent(input: CreateAgentInput): Promise<Agent> {
     const timestamp = now();
-    const id = randomUUID();
+    const requestedId = input.id?.trim();
+    const id = requestedId && requestedId.length > 0 ? requestedId : randomUUID();
+    if (this.store.snapshot().agents.some((a) => a.id === id)) {
+      throw new HttpError(409, `Agent id already exists: ${id}`);
+    }
     const agent: Agent = {
       id,
       name: input.name.trim(),
@@ -77,13 +104,27 @@ export class AgentService {
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
       lastError: null,
-      role: input.role?.trim() || null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
     await this.workspaces.create(agent);
     await this.store.mutate((database) => database.agents.push(agent));
-    this.registerAgent(agent.id, agent.description);
+    try {
+      await this.ensureAgentConnection(agent);
+    } catch (error) {
+      this.disconnectAgent(agent.id);
+      await this.store.mutate((database) => {
+        database.agents = database.agents.filter((item) => item.id !== agent.id);
+        database.messages = database.messages.filter((item) => item.agentId !== agent.id);
+        database.runs = database.runs.filter((item) => item.agentId !== agent.id);
+      });
+      await this.workspaces.archive(agent);
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new HttpError(
+        503,
+        `Agent coordination is unavailable; the SSE connection could not be established: ${detail}`,
+      );
+    }
     return agent;
   }
 
@@ -103,7 +144,6 @@ export class AgentService {
       if (input.name !== undefined) agent.name = input.name.trim();
       if (input.description !== undefined) agent.description = input.description.trim();
       if (input.instructions !== undefined) agent.instructions = input.instructions.trim();
-      if (input.role !== undefined) agent.role = input.role === null ? null : input.role.trim() || null;
       agent.lastError = null;
       agent.updatedAt = now();
       return structuredClone(agent);
@@ -115,6 +155,7 @@ export class AgentService {
 
   async deleteAgent(id: string): Promise<{ archivedWorkspace: string }> {
     const agent = this.getAgent(id);
+    this.disconnectAgent(agent.id);
     await this.cancelExecution(id);
     const archivedWorkspace = await this.workspaces.archive(agent);
     await this.store.mutate((database) => {
@@ -126,17 +167,15 @@ export class AgentService {
     return { archivedWorkspace };
   }
 
-  private registerAgent(agentId: string, description = ""): void {
-    if (!this.router || this.router.hasAgent(agentId)) return;
-    this.router?.registerAgent(agentId, { send: async () => undefined }, { description });
-  }
-
   async startAgent(id: string): Promise<Agent> {
-    return this.setStatus(id, "ready");
+    const agent = await this.setStatus(id, "ready");
+    await this.ensureAgentConnection(agent);
+    return agent;
   }
 
   async stopAgent(id: string): Promise<Agent> {
     this.getAgent(id);
+    this.disconnectAgent(id);
     await this.cancelExecution(id);
     return this.setStatus(id, "stopped");
   }
@@ -168,6 +207,7 @@ export class AgentService {
   async sendMessage(
     agentId: string,
     prompt: string,
+    coordinationTaskId?: string,
   ): Promise<{ run: AgentRun; message: Message }> {
     if (!isArkConfigured(this.config)) {
       throw new HttpError(
@@ -216,7 +256,7 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run);
+    const execution = this.executeRun(agentAtStart, run, coordinationTaskId);
     this.activeExecutions.set(agentId, execution);
     void execution
       .finally(() => {
@@ -247,7 +287,11 @@ export class AgentService {
     };
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+    coordinationTaskId?: string,
+  ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
@@ -256,6 +300,7 @@ export class AgentService {
       }
     });
     try {
+      await this.ensureAgentConnection(agentAtStart);
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
@@ -264,7 +309,18 @@ export class AgentService {
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
-        ...(this.coordination ? { coordination: this.coordination } : {}),
+        ...(this.coordination
+          ? {
+              coordination: {
+                ...this.coordination,
+                baseUrl:
+                  this.config.runtimeProvider === "container"
+                    ? this.coordination.runtimeBaseUrl ?? this.coordination.baseUrl
+                    : this.coordination.baseUrl,
+                taskId: coordinationTaskId ?? this.coordination.taskId,
+              },
+            }
+          : {}),
       });
       const completedAt = now();
       await this.store.mutate((database) => {
@@ -338,5 +394,84 @@ export class AgentService {
     } finally {
       this.cancellationRequests.delete(agentId);
     }
+  }
+
+  private async ensureAgentConnection(agent: Agent): Promise<void> {
+    if (!this.router || !this.coordination || this.eventConnections.has(agent.id)) return;
+    const existingAttempt = this.connectionAttempts.get(agent.id);
+    if (existingAttempt) return existingAttempt;
+
+    this.connectionStops.delete(agent.id);
+    const attempt = (async () => {
+      const connection = await openAgentEvents({
+        baseUrl: this.coordination!.baseUrl,
+        agentId: agent.id,
+        ...(this.coordination!.authToken ? { authToken: this.coordination!.authToken } : {}),
+        onMessage: (message) => this.enqueueDispatchedMessage(agent.id, message),
+      });
+      this.eventConnections.set(agent.id, connection);
+      void this.monitorAgentConnection(agent, connection);
+    })();
+    this.connectionAttempts.set(agent.id, attempt);
+    try {
+      await attempt;
+    } finally {
+      if (this.connectionAttempts.get(agent.id) === attempt) {
+        this.connectionAttempts.delete(agent.id);
+      }
+    }
+  }
+
+  private disconnectAgent(agentId: string): void {
+    this.connectionStops.add(agentId);
+    const connection = this.eventConnections.get(agentId);
+    if (connection) {
+      connection.close();
+      this.eventConnections.delete(agentId);
+      this.router?.unregisterAgent(agentId);
+    }
+  }
+
+  private async monitorAgentConnection(agent: Agent, connection: AgentEventsConnection): Promise<void> {
+    await connection.settled.catch(() => undefined);
+    if (this.eventConnections.get(agent.id) === connection) {
+      this.eventConnections.delete(agent.id);
+      this.router?.unregisterAgent(agent.id);
+    }
+    let delay = 250;
+    while (this.shouldReconnect(agent.id)) {
+      await reconnectDelay(delay);
+      if (!this.shouldReconnect(agent.id)) return;
+      try {
+        await this.ensureAgentConnection(agent);
+        return;
+      } catch {
+        delay = Math.min(delay * 2, 10_000);
+      }
+    }
+  }
+
+  private shouldReconnect(agentId: string): boolean {
+    if (this.connectionStops.has(agentId)) return false;
+    const agent = this.store.snapshot().agents.find((item) => item.id === agentId);
+    return Boolean(agent && agent.status !== "stopped");
+  }
+
+  private enqueueDispatchedMessage(agentId: string, message: ProtocolResponse): void {
+    const previous = this.dispatchQueues.get(agentId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const active = this.activeExecutions.get(agentId);
+        if (active) await active;
+        await this.sendMessage(
+          agentId,
+          "A coordination message was dispatched to you:\n\n" + JSON.stringify(message),
+        );
+      });
+    this.dispatchQueues.set(agentId, next);
+    void next.finally(() => {
+      if (this.dispatchQueues.get(agentId) === next) this.dispatchQueues.delete(agentId);
+    });
   }
 }

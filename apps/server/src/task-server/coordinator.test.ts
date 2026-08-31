@@ -29,7 +29,6 @@ function makeAgent(id: string): Agent {
     workspacePath: `/tmp/${id}`,
     codexThreadId: null,
     lastError: null,
-    role: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

@@ -92,7 +92,7 @@ export class Coordinator implements RouterCoordinator {
   }
 
   /** Submit an initial DAG. Validates cycles + owner existence before persisting. */
-  async submitTasks(tasks: readonly NewTask[]): Promise<InternalTask[]> {
+  async submitTasks(tasks: readonly NewTask[], schedule = true): Promise<InternalTask[]> {
     const existingIds = new Set(this.taskStore.list().map((t) => t.id));
     const validation = validateDag(tasks, existingIds);
     if (!validation.ok) throw new DagRejected(validation.errors);
@@ -102,7 +102,7 @@ export class Coordinator implements RouterCoordinator {
       }
     }
     const created = await this.taskStore.createMany(tasks);
-    void this.tick();
+    if (schedule) void this.tick();
     return created;
   }
 
@@ -242,8 +242,20 @@ export class Coordinator implements RouterCoordinator {
     void this.tick();
   }
 
-  async onCreateTasks(_agentId: string, request: CreateTasksRequest): Promise<Array<{ id: string }>> {
-    const created = await this.submitTasks(request.tasks);
+  async onCreateTasks(agentId: string, request: CreateTasksRequest): Promise<Array<{ id: string }>> {
+    const created = await this.submitTasks(request.tasks, false);
+    // A root agent may create its own task after a coordination-enabled
+    // playground run has started. Adopt it instead of pushing a second run
+    // to the same agent while its current run is still active.
+    for (const task of created) {
+      if (task.owner === agentId && task.depends_on.length === 0 && task.state === "unassigned") {
+        await this.taskStore.update(task.id, {
+          state: "assigned",
+          assigned_at: new Date().toISOString(),
+        });
+      }
+    }
+    void this.tick();
     return created.map((task) => ({ id: task.id }));
   }
 }

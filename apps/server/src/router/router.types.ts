@@ -21,3 +21,32 @@ export type DoneRequest = z.infer<typeof doneRequestSchema>;
 export type Request = z.infer<typeof requestSchema>;
 export type Envelope = z.infer<typeof envelopeSchema>;
 export type Response = z.infer<typeof responseSchema>;
+
+export type RouterEvent =
+  | {
+      seq: number;
+      at: string;
+      type: "request";
+      msg_id: string;
+      agent: string;
+      task_id: string | null;
+      payload: Envelope;
+    }
+  | {
+      seq: number;
+      at: string;
+      type: "response";
+      msg_id: string | null;
+      agent: string;
+      task_id: string | null;
+      payload: Response;
+    }
+  | {
+      seq: number;
+      at: string;
+      type: "error";
+      msg_id: string | null;
+      agent: string;
+      task_id: string | null;
+      error: string;
+    };

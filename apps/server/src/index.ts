@@ -24,7 +24,7 @@ const service = new AgentService(config, store, workspaces, runner, router, {
 });
 await service.initialize();
 
-const app = await createApp(config, service);
+const app = await createApp(config, service, router);
 const taskServer = await createTaskServerApp(config, router);
 
 const shutdown = async (signal: string) => {

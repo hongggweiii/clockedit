@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { AgentService } from "./agent-service.js";
+import { Router } from "./router/router.js";
 
 const service = {
   listAgents: () => [],
@@ -43,6 +44,24 @@ describe("HTTP boundary", () => {
       payload: JSON.stringify({ name: "x".repeat(1_100_000) }),
     });
     expect(oversized.statusCode).toBe(413);
+    await app.close();
+  });
+
+  it("serves router activity with an incremental cursor", async () => {
+    const router = new Router({ onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]) });
+    router.registerAgent("agent-1", { send: vi.fn() });
+    await router.handleMessage({
+      msg_id: "5ad35cb4-3863-4c69-94b8-c829fbaa78d3",
+      agent: "agent-1",
+      task_id: null,
+      body: { kind: "fetch", paths: ["a.ts"] },
+    });
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), service, router);
+    const all = await app.inject({ method: "GET", url: "/api/events" });
+    expect(all.statusCode).toBe(200);
+    expect(all.json().events).toHaveLength(2);
+    const afterRequest = await app.inject({ method: "GET", url: "/api/events?after=1" });
+    expect(afterRequest.json().events).toHaveLength(1);
     await app.close();
   });
 

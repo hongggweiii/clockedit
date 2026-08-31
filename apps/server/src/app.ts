@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
+import type { Router } from "./router/router.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
@@ -26,6 +27,7 @@ const messageBody = z.object({
 export async function createApp(
   config: AppConfig,
   service: AgentService,
+  router?: Router,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -71,6 +73,11 @@ export async function createApp(
   app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
 
   app.get("/api/system", async () => service.systemInfo());
+
+  app.get("/api/events", async (request) => {
+    const query = z.object({ after: z.coerce.number().int().nonnegative().default(0) }).parse(request.query);
+    return { events: router?.getEvents(query.after) ?? [] };
+  });
 
   app.get("/api/agents", async () => ({ agents: service.listAgents() }));
 

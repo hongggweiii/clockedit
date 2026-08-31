@@ -8,6 +8,16 @@ const starterPrompts = [
   "Build a responsive single-page todo app with tests.",
 ];
 
+// Temporary development fallback. Set to true when the task API is unavailable
+// and the orchestrator needs sample data for UI work.
+const ENABLE_MOCK_TASKS = false;
+const mockTasks: Task[] = [
+  { id: "task-001", detail: "Parse source data", state: "done", owner: "agent-parser", depends_on: [], writes: ["src/parser.py"], strikes: 0 },
+  { id: "task-002", detail: "Build processing engine", state: "assigned", owner: "agent-builder", depends_on: ["task-001"], writes: ["src/engine.ts", "package.json"], strikes: 1 },
+  { id: "task-003", detail: "Run the test suite", state: "escalated", owner: "agent-tester", depends_on: ["task-002"], writes: ["tests/suite.test.ts"], strikes: 3 },
+  { id: "task-004", detail: "Deploy the application", state: "blocked", owner: "agent-deployer", depends_on: ["task-003"], writes: ["deploy/manifest.yaml"], strikes: 0 },
+];
+
 const emptyForm = {
   name: "",
   description: "",
@@ -128,21 +138,12 @@ export default function App() {
     if (pollingEventsRef.current) return;
     pollingEventsRef.current = true;
     try {
-      // Task view is retained for the future /api/tasks backend endpoint.
+      // A successful response, including an empty task list, is authoritative.
       const tasksRes = await api.tasks().catch(() => null);
-      if (tasksRes?.tasks.length) {
+      if (tasksRes) {
         setTasks(tasksRes.tasks);
-      } else {
-        setTasks((current) =>
-          current.length > 0
-            ? current
-            : [
-                { id: "task-001", detail: "Parse source data", state: "done", owner: "agent-parser", depends_on: [], writes: ["src/parser.py"], strikes: 0 },
-                { id: "task-002", detail: "Build processing engine", state: "assigned", owner: "agent-builder", depends_on: ["task-001"], writes: ["src/engine.ts", "package.json"], strikes: 1 },
-                { id: "task-003", detail: "Run the test suite", state: "escalated", owner: "agent-tester", depends_on: ["task-002"], writes: ["tests/suite.test.ts"], strikes: 3 },
-                { id: "task-004", detail: "Deploy the application", state: "blocked", owner: "agent-deployer", depends_on: ["task-003"], writes: ["deploy/manifest.yaml"], strikes: 0 },
-              ],
-        );
+      } else if (ENABLE_MOCK_TASKS) {
+        setTasks(mockTasks);
       }
 
       // Fetch incremental events using the BFF sequence cursor.

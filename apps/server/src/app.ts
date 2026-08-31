@@ -79,6 +79,10 @@ export async function createApp(
     return { events: router?.getEvents(query.after) ?? [] };
   });
 
+  app.get("/api/tasks", async () => ({
+    tasks: router ? await router.getTasks() : [],
+  }));
+
   app.get("/api/agents", async () => ({ agents: service.listAgents() }));
 
   app.post("/api/agents", async (request, reply) => {

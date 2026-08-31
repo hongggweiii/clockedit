@@ -7,15 +7,20 @@ import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
 import { createRouter, placeholderCoordinator } from "./router/router.js";
 import { createTaskServerApp } from "./task-server/app.js";
+import { TaskStore } from "./task-server/task-store.js";
 
 const config = loadConfig();
 await writeCodexConfig(config);
 
 const store = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));
+const taskStore = new TaskStore(store);
 const workspaces = new WorkspaceManager(config.workspaceRoot);
 const runner = createRunner(config);
 // TODO: Replace the placeholder with the task-server Coordinator from the server branch.
-const router = createRouter(placeholderCoordinator);
+const router = createRouter({
+  ...placeholderCoordinator,
+  listTasks: async () => taskStore.list(),
+});
 const service = new AgentService(config, store, workspaces, runner, router, {
   baseUrl: config.taskServerBaseUrl,
   projectId: config.runtimeInstanceId,

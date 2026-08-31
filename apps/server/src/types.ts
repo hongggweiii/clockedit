@@ -57,6 +57,9 @@ export interface Database {
   reads: Record<string, Record<string, number>>;
   events: StoredEvent[];
   eventSeq: number;
+  // Tasks are persisted by the task-server store. Keep the shared database
+  // type independent from the task-server's internal task metadata.
+  tasks: unknown[];
 }
 
 export interface CreateAgentInput {

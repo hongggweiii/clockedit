@@ -11,6 +11,7 @@ import {
 } from "./schemas/router.schemas.js";
 import type { CommitRequest, CreateTasksRequest, DoneRequest, Envelope, FetchRequest, ListFilesRequest, Response, RouterEvent } from "./router.types.js";
 import type { AgentProfile } from "../types.js";
+import type { Task } from "../task-server/task.types.js";
 
 type RouterEventInput =
   | Omit<Extract<RouterEvent, { type: "request" }>, "seq" | "at">
@@ -22,6 +23,7 @@ export interface AgentChannel {
 }
 
 export interface RouterCoordinator {
+  listTasks?(): Promise<Task[]>;
   listFiles?(agentId: string, request: ListFilesRequest): Promise<Array<{ path: string; version: number }>>;
   onFetch(agentId: string, request: FetchRequest): Promise<Array<{ path: string; version: number; content: string }>>;
   onCommit(agentId: string, taskId: string, request: CommitRequest): Promise<Response>;
@@ -66,6 +68,11 @@ export class Router {
 
   getEvents(after = 0): RouterEvent[] {
     return structuredClone(this.events.filter((event) => event.seq > after));
+  }
+
+  async getTasks(): Promise<Task[]> {
+    if (!this.coordinator.listTasks) throw new Error("Task listing is not configured");
+    return structuredClone(await this.coordinator.listTasks());
   }
 
   registerAgent(agentId: string, channel: AgentChannel, profile: Partial<Pick<AgentProfile, "description">> = {}): () => void {

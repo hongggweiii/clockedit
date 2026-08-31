@@ -6,7 +6,7 @@
 
 When several coding agents work on the same codebase at once, nothing keeps them
 out of each other's way:
-
+As such, agents typically work in separate worktrees as there is no mechanism to coordinate concurrent changes or prevent overlapping work.
 - two agents edit the same file and one overwrites the other
 - the backend changes what an endpoint returns, the frontend keeps building
 against the old shape

@@ -99,6 +99,7 @@ describe("Agent coordination tools", () => {
       "utf8",
     );
     await expect(assertCoordinationDone(request)).resolves.toBeUndefined();
+    if (!request.coordination) throw new Error("Expected coordination context");
     await expect(assertCoordinationDone({
       ...request,
       coordination: { ...request.coordination, taskId: "task-2" },

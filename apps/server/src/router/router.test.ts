@@ -13,7 +13,7 @@ describe("Router", () => {
     const coordinator = { onFetch: vi.fn().mockResolvedValue([
       { path: "a.ts", version: 1, content: "x" },
       { path: "b.ts", version: 2, content: "y" },
-    ]), commit: vi.fn(), done: vi.fn() };
+    ]), onCommit: vi.fn(), onDone: vi.fn() };
     const router = new Router(coordinator);
     await expect(router.handleMessage(envelope({ kind: "fetch", paths: ["a.ts"] }))).rejects.toThrow("not registered");
     router.registerAgent("agent-1", { send: vi.fn() });
@@ -72,20 +72,36 @@ describe("Router", () => {
   });
 
   it("emits each handled request and response in order", async () => {
-    const router = new Router({ onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]) });
+    const router = new Router({
+      onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]),
+      onCommit: vi.fn(),
+      onDone: vi.fn(),
+    });
     router.registerAgent("agent-1", { send: vi.fn() });
 
     await router.handleMessage(envelope({ kind: "fetch", paths: ["a.ts"] }));
 
     const events = router.getEvents();
     expect(events.map((event) => event.type)).toEqual(["request", "response"]);
-    expect(events[0]?.payload).toMatchObject({ body: { kind: "fetch" } });
-    expect(events[1]?.payload).toMatchObject({ kind: "files" });
+    const requestEvent = events[0];
+    const responseEvent = events[1];
+    expect(requestEvent?.type).toBe("request");
+    expect(responseEvent?.type).toBe("response");
+    if (requestEvent?.type === "request") {
+      expect(requestEvent.payload).toMatchObject({ body: { kind: "fetch" } });
+    }
+    if (responseEvent?.type === "response") {
+      expect(responseEvent.payload).toMatchObject({ kind: "files" });
+    }
     expect(router.getEvents()).toEqual(events);
   });
 
   it("emits a failed request as an error event", async () => {
-    const router = new Router({ onFetch: vi.fn().mockRejectedValue(new Error("backend unavailable")) });
+    const router = new Router({
+      onFetch: vi.fn().mockRejectedValue(new Error("backend unavailable")),
+      onCommit: vi.fn(),
+      onDone: vi.fn(),
+    });
     router.registerAgent("agent-1", { send: vi.fn() });
 
     await expect(router.handleMessage(envelope({ kind: "fetch", paths: ["a.ts"] }))).rejects.toThrow("backend unavailable");

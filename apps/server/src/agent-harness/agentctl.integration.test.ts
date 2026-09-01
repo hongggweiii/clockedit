@@ -53,7 +53,7 @@ describe("agentctl", () => {
         result = {
           ok: true,
           kind: "files",
-          files: body.paths.map((requestedPath) => ({
+          files: body.paths.map((requestedPath: string) => ({
             path: requestedPath,
             version: requestedPath.startsWith("contracts/") ? 2 : 3,
             content: requestedPath.startsWith("contracts/")

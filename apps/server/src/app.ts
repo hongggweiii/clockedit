@@ -8,13 +8,28 @@ import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
 import type { Router } from "./router/router.js";
+import type { Coordinator } from "./task-server/coordinator.js";
+import { DagRejected } from "./task-server/coordinator.js";
 
-const agentIdParams = z.object({ id: z.string().uuid() });
+// Allow non-UUID agent ids so demo scenarios can seed agents with fixed
+// human-readable ids (e.g. "backend", "frontend", "qa").
+const agentIdParams = z.object({ id: z.string().trim().min(1).max(256) });
 const runIdParams = z.object({ id: z.string().uuid() });
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
   instructions: z.string().max(10_000).optional(),
+  id: z.string().trim().min(1).max(256).optional(),
+});
+const newTaskBody = z.object({
+  id: z.string().trim().min(1).max(256),
+  detail: z.string().trim().min(1).max(10_000),
+  owner: z.string().trim().min(1).max(256).nullable(),
+  depends_on: z.array(z.string().trim().min(1)).default([]),
+  writes: z.array(z.string().trim().min(1)).default([]),
+});
+const submitTasksBody = z.object({
+  tasks: z.array(newTaskBody).min(1).max(256),
 });
 const updateAgentBody = createAgentBody.partial().refine(
   (value) => Object.keys(value).length > 0,
@@ -28,6 +43,7 @@ export async function createApp(
   config: AppConfig,
   service: AgentService,
   router?: Router,
+  coordinator?: Coordinator,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -134,6 +150,28 @@ export async function createApp(
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
   });
+
+  if (coordinator) {
+    // Public task submission: sends a DAG to the Coordinator. Owner ids in
+    // each task must match a registered agent id (see AgentService).
+    app.post("/api/tasks", async (request, reply) => {
+      const body = submitTasksBody.parse(request.body);
+      try {
+        const created = await coordinator.submitTasks(body.tasks);
+        return reply.code(201).send({ tasks: created });
+      } catch (error) {
+        if (error instanceof DagRejected) {
+          return reply.code(400).send({ error: "DAG rejected", details: error.reason });
+        }
+        throw error;
+      }
+    });
+
+    // Public task poll: expose current DAG + task states for the UI or a demo watcher.
+    app.get("/api/tasks", async () => {
+      return { tasks: coordinator.listTasks() };
+    });
+  }
 
   if (config.nodeEnv === "production") {
     const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));

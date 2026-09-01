@@ -5,7 +5,7 @@ import { pathSchema } from "./file.schemas.js";
 const nonEmptyStringSchema = z.string().trim().min(1);
 export const taskIdSchema = nonEmptyStringSchema.max(256);
 
-export const taskStateSchema = z.enum(["unassigned", "blocked", "assigned", "escalated", "done"]);
+export const taskStateSchema = z.enum(["unassigned", "blocked", "assigned", "done", "dropped"]);
 
 export const taskSchema = z.strictObject({
   id: taskIdSchema,

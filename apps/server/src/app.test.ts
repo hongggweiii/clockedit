@@ -48,7 +48,11 @@ describe("HTTP boundary", () => {
   });
 
   it("serves router activity with an incremental cursor", async () => {
-    const router = new Router({ onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]) });
+    const router = new Router({
+      onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]),
+      onCommit: vi.fn(),
+      onDone: vi.fn(),
+    });
     router.registerAgent("agent-1", { send: vi.fn() });
     await router.handleMessage({
       msg_id: "5ad35cb4-3863-4c69-94b8-c829fbaa78d3",

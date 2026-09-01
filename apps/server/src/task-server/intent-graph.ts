@@ -1,0 +1,24 @@
+// Write-write overlap detection over the shared Task's `writes` field.
+// The shared schema does not declare reads at task-creation time — reads
+// are only known at commit time — so pre-dispatch conflict detection is
+// limited to write-write. Exact-path match; add glob support if needed.
+
+export interface IntentConflict {
+  path: string;
+}
+
+export function writesOverlap(a: readonly string[], b: readonly string[]): IntentConflict | null {
+  if (a.length === 0 || b.length === 0) return null;
+  const set = new Set(a);
+  for (const path of b) {
+    if (set.has(path)) return { path };
+  }
+  return null;
+}
+
+export function conflictsWithAny(
+  candidateWrites: readonly string[],
+  otherWrites: readonly (readonly string[])[],
+): boolean {
+  return otherWrites.some((other) => writesOverlap(candidateWrites, other) !== null);
+}

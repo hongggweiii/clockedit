@@ -148,6 +148,14 @@ fi
 export NODE_ENV=production
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-3000}"
+export TASK_SERVER_HOST="${TASK_SERVER_HOST:-0.0.0.0}"
+if [[ -z "${TASK_SERVER_RUNTIME_BASE_URL:-}" ]]; then
+  if [[ "$(basename "$engine")" == "podman" ]]; then
+    export TASK_SERVER_RUNTIME_BASE_URL="http://host.containers.internal:${TASK_SERVER_PORT:-4000}"
+  else
+    export TASK_SERVER_RUNTIME_BASE_URL="http://host.docker.internal:${TASK_SERVER_PORT:-4000}"
+  fi
+fi
 export CODEX_SANDBOX_MODE="$codex_sandbox_mode"
 export RUNTIME_PROVIDER=container
 export CONTAINER_ENGINE="$engine"

@@ -57,12 +57,18 @@ export interface Database {
   reads: Record<string, Record<string, number>>;
   events: StoredEvent[];
   eventSeq: number;
+  // Task-server persistence. Stored as `unknown[]` here to avoid a circular
+  // type import with router schemas; the task-server casts through its own
+  // InternalTask (see apps/server/src/task-server/task.types.ts).
+  tasks: unknown[];
 }
 
 export interface CreateAgentInput {
   name: string;
   description?: string | undefined;
   instructions?: string | undefined;
+  /** Optional deterministic id (used by demo scenario seeding). */
+  id?: string | undefined;
 }
 
 export interface UpdateAgentInput {
@@ -86,7 +92,10 @@ export interface RunnerRequest {
 }
 
 export interface CoordinationContext {
+  /** Host-process URL used for the AgentService SSE loopback. */
   baseUrl: string;
+  /** Optional URL reachable from an isolated Runtime container. */
+  runtimeBaseUrl?: string;
   projectId: string;
   taskId: string | null;
   authToken?: string;

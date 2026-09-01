@@ -47,6 +47,7 @@ describe("Container Codex runner", () => {
     expect(args).toContain("keep-id");
     expect(args).toContain("COORDINATION_BASE_URL");
     expect(args).toContain("COORDINATION_AUTH_TOKEN");
+    expect(args).toContain("COORDINATION_TASK_ID");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
     expect(args).not.toContain("coordination-secret");
   });

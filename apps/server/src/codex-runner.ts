@@ -65,6 +65,15 @@ export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
     if (item.type === "agent_message" && typeof item.text === "string") {
       parsed.messages.push(item.text);
     }
+    if (item.type === "error") {
+      const message =
+        typeof item.message === "string"
+          ? item.message
+          : typeof item.error === "string"
+            ? item.error
+            : "Codex reported an unknown item error";
+      parsed.errors.push(message);
+    }
   }
 
   if (event.type === "turn.completed" && event.usage && typeof event.usage === "object") {

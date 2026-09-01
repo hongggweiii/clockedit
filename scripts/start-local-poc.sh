@@ -83,6 +83,18 @@ fi
 engine="$(detect_engine)"
 log "Using $engine as the Agent Runtime engine."
 
+# Agent Runtime containers need a host-reachable address for the private
+# coordination server.  127.0.0.1 inside a container points back to the
+# container itself, not this local control-plane process.
+if [[ -z "${TASK_SERVER_BASE_URL:-}" ]]; then
+  if [[ "$(basename "$engine")" == "podman" ]]; then
+    export TASK_SERVER_BASE_URL="http://host.containers.internal:4000"
+  else
+    export TASK_SERVER_BASE_URL="http://host.docker.internal:4000"
+  fi
+fi
+export TASK_SERVER_HOST="${TASK_SERVER_HOST:-0.0.0.0}"
+
 if [[ ! -d node_modules ]]; then
   log "Installing application dependencies."
   npm ci

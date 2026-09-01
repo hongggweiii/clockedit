@@ -95,6 +95,10 @@ export async function createApp(
     return { events: router?.getEvents(query.after) ?? [] };
   });
 
+  app.get("/api/tasks", async () => ({
+    tasks: router ? await router.getTasks() : [],
+  }));
+
   app.get("/api/agents", async () => ({ agents: service.listAgents() }));
 
   app.post("/api/agents", async (request, reply) => {
@@ -167,10 +171,6 @@ export async function createApp(
       }
     });
 
-    // Public task poll: expose current DAG + task states for the UI or a demo watcher.
-    app.get("/api/tasks", async () => {
-      return { tasks: coordinator.listTasks() };
-    });
   }
 
   if (config.nodeEnv === "production") {

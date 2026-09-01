@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
-import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
+import type {
+  AgentRunner,
+  CoordinationContext,
+  RunnerRequest,
+  RunnerResult,
+} from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import { Router } from "./router/router.js";
 

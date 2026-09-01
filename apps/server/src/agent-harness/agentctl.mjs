@@ -6,7 +6,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /** @typedef {import("../router/router.types.js").Request} Request */
-/** @typedef {{ versions: Record<string, number>, edited: string[], doneTaskId: string | null }} CoordinationState */
+/** @typedef {{ versions: Record<string, number>, edited: string[], doneTaskId: string | null, activeTaskId: string | null }} CoordinationState */
 /** @typedef {{ ok: boolean, [key: string]: any }} ProtocolResponse */
 
 const stateDirectoryName = ".coordination";
@@ -225,7 +225,7 @@ async function requestFromSchema(candidate) {
 
 /** @returns {CoordinationState} */
 function emptyState() {
-  return { versions: Object.create(null), edited: [], doneTaskId: null };
+  return { versions: Object.create(null), edited: [], doneTaskId: null, activeTaskId: null };
 }
 
 /** @returns {Promise<CoordinationState>} */
@@ -234,7 +234,7 @@ async function readState() {
     /** @type {unknown} */
     const parsed = JSON.parse(await readFile(statePath(), "utf8"));
     if (!parsed || typeof parsed !== "object") throw new Error("Invalid state shape");
-    const candidate = /** @type {{ versions?: unknown, edited?: unknown, doneTaskId?: unknown }} */ (parsed);
+    const candidate = /** @type {{ versions?: unknown, edited?: unknown, doneTaskId?: unknown, activeTaskId?: unknown }} */ (parsed);
     if (!candidate.versions || typeof candidate.versions !== "object") {
       throw new Error("Invalid state versions");
     }
@@ -259,11 +259,21 @@ async function readState() {
     ) {
       throw new Error("Invalid done task id");
     }
+    if (
+      candidate.activeTaskId !== undefined &&
+      candidate.activeTaskId !== null &&
+      typeof candidate.activeTaskId !== "string"
+    ) {
+      throw new Error("Invalid active task id");
+    }
     return {
       versions,
       edited: normalizedEdited,
       doneTaskId: typeof candidate.doneTaskId === "string"
         ? candidate.doneTaskId
+        : null,
+      activeTaskId: typeof candidate.activeTaskId === "string"
+        ? candidate.activeTaskId
         : null,
     };
   } catch (error) {
@@ -282,8 +292,8 @@ async function writeState(state) {
 }
 
 /** @param {boolean} required */
-function taskId(required) {
-  const value = process.env.COORDINATION_TASK_ID?.trim() || null;
+async function taskId(required) {
+  const value = process.env.COORDINATION_TASK_ID?.trim() || (await readState()).activeTaskId;
   if (required && !value) exitWithError("COORDINATION_TASK_ID is required for this command");
   return value;
 }
@@ -316,7 +326,7 @@ async function send(body, requiresTask = false) {
       body: JSON.stringify({
         msg_id: randomUUID(),
         agent,
-        task_id: taskId(requiresTask),
+        task_id: await taskId(requiresTask),
         body,
       }),
     });
@@ -528,7 +538,23 @@ async function createTasks(args) {
       tasks,
     }),
   );
-  return send(request);
+  const response = await send(request);
+  const agent = requiredEnvironment("COORDINATION_AGENT_ID");
+  const selfOwnedRootTasks = tasks.filter(
+    (task) => task.owner === agent && task.depends_on.length === 0,
+  );
+  const adoptedTask = selfOwnedRootTasks.length === 1 ? selfOwnedRootTasks[0] : null;
+  if (adoptedTask && response.kind === "tasks") {
+    const activeTaskId = adoptedTask.id;
+    if (!response.task_ids.includes(activeTaskId)) {
+      exitWithError("Coordination server did not return the adopted task", activeTaskId);
+    }
+    const state = await readState();
+    state.activeTaskId = activeTaskId;
+    state.doneTaskId = null;
+    await writeState(state);
+  }
+  return response;
 }
 
 /** @param {string[]} args */
@@ -539,7 +565,8 @@ async function done(args) {
   );
   const response = await send(request, true);
   const state = await readState();
-  state.doneTaskId = taskId(true);
+  state.doneTaskId = await taskId(true);
+  state.activeTaskId = null;
   await writeState(state);
   return response;
 }

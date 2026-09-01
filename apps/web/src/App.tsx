@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type { Agent, AgentRun, Message, SystemEvent, SystemInfo, Task } from "./types";
 
 const starterPrompts = [
   "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
   "Inspect this workspace and explain what you would improve first.",
   "Build a responsive single-page todo app with tests.",
+];
+
+// Temporary development fallback. Set to true when the task API is unavailable
+// and the orchestrator needs sample data for UI work.
+const ENABLE_MOCK_TASKS = false;
+const mockTasks: Task[] = [
+  { id: "task-001", detail: "Parse source data", state: "done", owner: "agent-parser", depends_on: [], writes: ["src/parser.py"], strikes: 0 },
+  { id: "task-002", detail: "Build processing engine", state: "assigned", owner: "agent-builder", depends_on: ["task-001"], writes: ["src/engine.ts", "package.json"], strikes: 1 },
+  { id: "task-003", detail: "Run the test suite", state: "escalated", owner: "agent-tester", depends_on: ["task-002"], writes: ["tests/suite.test.ts"], strikes: 3 },
+  { id: "task-004", detail: "Deploy the application", state: "blocked", owner: "agent-deployer", depends_on: ["task-003"], writes: ["deploy/manifest.yaml"], strikes: 0 },
 ];
 
 const emptyForm = {
@@ -19,6 +29,7 @@ function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   }).format(new Date(value));
 }
 
@@ -36,6 +47,10 @@ function Spinner() {
 }
 
 export default function App() {
+  // Navigation View Tab: "orchestrator" | "playground"
+  const [activeTab, setActiveTab] = useState<"orchestrator" | "playground">("orchestrator");
+
+  // Platform State
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -49,10 +64,22 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
+
+  // Middleware Orchestrator State
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [events, setEvents] = useState<SystemEvent[]>([]);
+
+  // Audit Stream Filters & Sorting
+  const [filterAgent, setFilterAgent] = useState<string>("all");
+  const [filterTask, setFilterTask] = useState<string>("all");
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const pollingRunIds = useRef(new Set<string>());
+  const pollingEventsRef = useRef(false);
+  const lastSeqRef = useRef<number>(0);
   selectedIdRef.current = selectedId;
 
   const selected = useMemo(
@@ -60,14 +87,77 @@ export default function App() {
     [agents, selectedId],
   );
 
+  // Extract unique dynamic values for filtering
+  const uniqueAgents = useMemo(() => {
+    const set = new Set<string>();
+    events.forEach((ev) => {
+      if (ev.agent) set.add(ev.agent);
+    });
+    return Array.from(set);
+  }, [events]);
+
+  const uniqueTasks = useMemo(() => {
+    const set = new Set<string>();
+    events.forEach((ev) => {
+      if (ev.task_id) set.add(ev.task_id);
+    });
+    return Array.from(set);
+  }, [events]);
+
+  // Compute filtered & sorted events
+  const filteredEvents = useMemo(() => {
+    let result = events.filter((ev) => {
+      const matchAgent = filterAgent === "all" || ev.agent === filterAgent;
+      const matchTask = filterTask === "all" || ev.task_id === filterTask;
+      return matchAgent && matchTask;
+    });
+
+    if (sortOrder === "desc") {
+      result = result.slice().reverse();
+    } else {
+      result = result.slice();
+    }
+    return result;
+  }, [events, filterAgent, filterTask, sortOrder]);
+
   const refreshAgents = useCallback(async () => {
-    const { agents: next } = await api.listAgents();
-    setAgents(next);
-    setSelectedId((current) =>
-      current && next.some((agent) => agent.id === current)
-        ? current
-        : (next[0]?.id ?? null),
-    );
+    try {
+      const { agents: next } = await api.listAgents();
+      setAgents(next);
+      setSelectedId((current) =>
+        current && next.some((agent) => agent.id === current)
+          ? current
+          : (next[0]?.id ?? null),
+      );
+    } catch {
+      // Ignored during initial bootstrap polling
+    }
+  }, []);
+
+  const refreshOrchestrator = useCallback(async () => {
+    if (pollingEventsRef.current) return;
+    pollingEventsRef.current = true;
+    try {
+      // A successful response, including an empty task list, is authoritative.
+      const tasksRes = await api.tasks().catch(() => null);
+      if (tasksRes) {
+        setTasks(tasksRes.tasks);
+      } else if (ENABLE_MOCK_TASKS) {
+        setTasks(mockTasks);
+      }
+
+      // Fetch incremental events using the BFF sequence cursor.
+      const eventsRes = await api.events(lastSeqRef.current);
+      if (eventsRes.events && eventsRes.events.length > 0) {
+        const nextEvents = eventsRes.events;
+        lastSeqRef.current = Math.max(...nextEvents.map((event) => event.seq));
+        setEvents((current) => [...current, ...nextEvents].slice(-100));
+      }
+    } catch {
+      // Keep the last received events when the BFF is temporarily unavailable.
+    } finally {
+      pollingEventsRef.current = false;
+    }
   }, []);
 
   const refreshMessages = useCallback(async (agentId: string) => {
@@ -78,8 +168,12 @@ export default function App() {
   }, []);
 
   const bootstrap = useCallback(async () => {
-    await Promise.all([refreshAgents(), api.system().then(setSystem)]);
-  }, [refreshAgents]);
+    await Promise.all([
+      refreshAgents(),
+      refreshOrchestrator(),
+      api.system().then(setSystem),
+    ]);
+  }, [refreshAgents, refreshOrchestrator]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -91,10 +185,16 @@ export default function App() {
         if (!required) await bootstrap();
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+
+    const timer = setInterval(() => {
+      if (mountedRef.current) void refreshOrchestrator();
+    }, 1000);
+
     return () => {
       mountedRef.current = false;
+      clearInterval(timer);
     };
-  }, [bootstrap]);
+  }, [bootstrap, refreshOrchestrator]);
 
   useEffect(() => {
     setActiveRun(null);
@@ -269,8 +369,8 @@ export default function App() {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-live="polite">
-          <div className="brand-mark">A</div>
-          <span className="eyebrow">Agent Launchpad</span>
+          <div className="brand-mark">C</div>
+          <span className="eyebrow">ClockedIt Platform</span>
           <h1>Connecting to the control plane</h1>
           {error ? <div className="error-banner" role="alert">{error}</div> : <Spinner />}
         </section>
@@ -282,8 +382,8 @@ export default function App() {
     return (
       <main className="auth-screen">
         <form className="auth-card" onSubmit={unlock}>
-          <div className="brand-mark">A</div>
-          <span className="eyebrow">Agent Launchpad</span>
+          <div className="brand-mark">C</div>
+          <span className="eyebrow">ClockedIt Platform</span>
           <h1>Enter the access token</h1>
           <p>This shared demo token is configured by the platform operator.</p>
           {error && <div className="error-banner" role="alert">{error}</div>}
@@ -299,7 +399,7 @@ export default function App() {
             />
           </label>
           <button className="button button-primary" disabled={busy || !authInput.trim()}>
-            {busy ? <Spinner /> : "Open Launchpad"}
+            {busy ? <Spinner /> : "Open Platform"}
           </button>
         </form>
       </main>
@@ -310,15 +410,27 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">A</div>
+          <div className="brand-mark">C</div>
           <div>
-            <strong>Agent Launchpad</strong>
-            <span>
-              {system?.runtimeProvider === "container"
-                ? "Local container · Codex CLI"
-                : "ECS / Docker · Codex CLI"}
-            </span>
+            <strong>ClockedIt</strong>
+            <span>Multi-Agent Coordination Platform</span>
           </div>
+        </div>
+
+        {/* View Switcher */}
+        <div className="view-switcher">
+          <button
+            className={`tab-button ${activeTab === "orchestrator" ? "active" : ""}`}
+            onClick={() => setActiveTab("orchestrator")}
+          >
+            Orchestrator
+          </button>
+          <button
+            className={`tab-button ${activeTab === "playground" ? "active" : ""}`}
+            onClick={() => setActiveTab("playground")}
+          >
+            Playground
+          </button>
         </div>
 
         <button
@@ -332,7 +444,7 @@ export default function App() {
         </button>
 
         <div className="sidebar-label">
-          <span>Your Agents</span>
+          <span>Active Agents</span>
           <span>{agents.length}</span>
         </div>
         <nav className="agent-list">
@@ -340,12 +452,15 @@ export default function App() {
             <button
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
-              onClick={() => setSelectedId(agent.id)}
+              onClick={() => {
+                setSelectedId(agent.id);
+                if (activeTab !== "playground") setActiveTab("playground");
+              }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
               <div className="agent-card-copy">
                 <strong>{agent.name}</strong>
-                <span>{agent.description || "Coding Agent"}</span>
+                <span>{agent.description || "Worker Agent"}</span>
               </div>
               <span className={"mini-dot mini-" + agent.status} />
             </button>
@@ -353,38 +468,22 @@ export default function App() {
           {agents.length === 0 && (
             <div className="empty-sidebar">
               <span>◇</span>
-              Create your first coding Agent.
+              No active worker agents found.
             </div>
           )}
         </nav>
 
         <div className="runtime-card">
-          <span className="eyebrow">Runtime</span>
-          <strong>{system?.runtime ?? "Checking…"}</strong>
+          <span className="eyebrow">OCC Runtime Engine</span>
+          <strong>{system?.runtime ?? "Ready"}</strong>
           <span>
-            {system?.arkModel ?? "Ark model not configured"}
+            {system?.arkModel ?? "Ark Endpoint Active"}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
       </aside>
 
       <main className="main">
-        {!system?.arkConfigured || !system?.codexAvailable ? (
-          <div className="config-banner">
-            <span>!</span>
-            <div>
-              <strong>Runtime configuration needed</strong>
-              <p>
-                {!system?.arkConfigured
-                  ? "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground."
-                  : system.runtimeProvider === "container"
-                    ? "The local container engine or Agent Runtime image is unavailable. Rerun npm run poc."
-                    : "Codex CLI was not found. Use the Docker image or install @openai/codex."}
-              </p>
-            </div>
-          </div>
-        ) : null}
-
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
@@ -392,216 +491,406 @@ export default function App() {
           </div>
         )}
 
-        {selected ? (
-          <>
+        {activeTab === "orchestrator" ? (
+          /* ==================== MULTI-AGENT ORCHESTRATOR & OCC VIEW ==================== */
+          <div className="orchestrator-layout">
             <header className="agent-header">
               <div>
                 <div className="header-title-row">
-                  <h1>{selected.name}</h1>
-                  <StatusPill status={selected.status} />
+                  <h1>Multi-Agent Coordination</h1>
+                  <span className="status status-ready">
+                    <span className="status-dot" /> Live Coordinator
+                  </span>
                 </div>
-                <p>{selected.description || "A Codex coding Agent in an isolated workspace."}</p>
               </div>
               <div className="header-actions">
-                <button
-                  className="button button-ghost"
-                  onClick={() => setShowSettings((value) => !value)}
-                  disabled={busy || selected.status === "busy"}
-                >
-                  Settings
-                </button>
-                <button
-                  className="button button-ghost"
-                  onClick={toggleAgent}
-                  disabled={busy}
-                >
-                  {selected.status === "stopped" ? "Start" : "Stop"}
-                </button>
-                <button
-                  className="button button-danger"
-                  onClick={deleteAgent}
-                  disabled={busy || selected.status === "busy"}
-                >
-                  Delete
+                <button className="button button-ghost" onClick={() => refreshOrchestrator()}>
+                  ↻ Refresh
                 </button>
               </div>
             </header>
 
-            {showSettings && (
-              <form className="settings-panel" onSubmit={saveAgent}>
-                <div className="settings-title">
+            {/* Metrics Ribbon */}
+            <div className="occ-stats-ribbon">
+              <div className="occ-stat-card">
+                <span className="eyebrow">Total Pipeline Tasks</span>
+                <strong>{tasks.length}</strong>
+              </div>
+              <div className="occ-stat-card">
+                <span className="eyebrow">Assigned / Running</span>
+                <strong className="text-blue">{tasks.filter((task) => task.state === "assigned").length}</strong>
+              </div>
+              <div className="occ-stat-card">
+                <span className="eyebrow">Escalated (Intervention)</span>
+                <strong className="text-red">{tasks.filter((task) => task.state === "escalated").length}</strong>
+              </div>
+              <div className="occ-stat-card">
+                <span className="eyebrow">Completed</span>
+                <strong className="text-green">{tasks.filter((task) => task.state === "done").length}</strong>
+              </div>
+            </div>
+
+            <div className="dashboard-grid">
+              {/* Task Matrix Table */}
+              <section className="dashboard-section task-matrix-panel">
+                <div className="section-header">
                   <div>
-                    <span className="eyebrow">Agent configuration</span>
-                    <h2>Instructions and identity</h2>
+                    <span className="eyebrow">Task Execution Dashboard</span>
                   </div>
-                  <button type="button" onClick={() => setShowSettings(false)}>×</button>
                 </div>
-                <div className="form-grid">
-                  <label>
-                    Name
-                    <input
-                      value={form.name}
-                      onChange={(event) => setForm({ ...form, name: event.target.value })}
-                      required
-                      maxLength={80}
-                    />
-                  </label>
-                  <label>
-                    Description
-                    <input
-                      value={form.description}
-                      onChange={(event) =>
-                        setForm({ ...form, description: event.target.value })
-                      }
-                      maxLength={500}
-                    />
-                  </label>
+
+                <div className="table-wrapper">
+                  <table className="task-table">
+                    <thead>
+                      <tr>
+                        <th>Task ID</th>
+                        <th>State</th>
+                        <th>Worker Agent</th>
+                        <th>Dependencies</th>
+                        <th>Intent (Target Writes)</th>
+                        <th>Strikes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tasks.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="empty-row">
+                            No tasks currently in the queue.
+                          </td>
+                        </tr>
+                      ) : (
+                        tasks.map((task) => (
+                          <tr key={task.id} className={task.state === "escalated" ? "row-escalated" : ""}>
+                            <td className="font-mono font-bold">{task.id}</td>
+                            <td><span className={`task-badge badge-${task.state}`}>{task.state}</span></td>
+                            <td className="font-mono">{task.owner ?? "Unassigned"}</td>
+                            <td>
+                              {task.depends_on.length > 0 ? (
+                                <div className="tag-group">
+                                  {task.depends_on.map((dependency) => <span key={dependency} className="code-tag">{dependency}</span>)}
+                                </div>
+                              ) : <span className="muted-text">None</span>}
+                            </td>
+                            <td>
+                              {task.writes.length > 0 ? (
+                                <div className="tag-group">
+                                  {task.writes.map((file) => <span key={file} className="code-tag-amber">{file}</span>)}
+                                </div>
+                              ) : <span className="muted-text">No target writes</span>}
+                            </td>
+                            <td>
+                              <span className={`strikes-badge ${task.strikes > 0 ? "has-strikes" : ""}`}>
+                                {task.strikes}/3
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-                <label>
-                  System instructions
-                  <textarea
-                    value={form.instructions}
-                    onChange={(event) =>
-                      setForm({ ...form, instructions: event.target.value })
-                    }
-                    rows={5}
-                    maxLength={10_000}
-                  />
-                </label>
-                <div className="panel-footer">
-                  <code>{selected.workspacePath}</code>
-                  <button className="button button-primary" disabled={busy}>
-                    {busy ? <Spinner /> : "Save changes"}
+              </section>
+
+              {/* Real-Time OCC Event Stream with Filtering & Sorting */}
+              <section className="dashboard-section events-stream-panel">
+                <div className="section-header">
+                  <div>
+                    <span className="eyebrow">Audit Stream</span>
+                  </div>
+                  <span className="pulse" />
+                </div>
+
+                {/* Filter / Sort Control Bar */}
+                <div className="stream-filter-bar">
+                  <select
+                    className="stream-select"
+                    value={filterAgent}
+                    onChange={(e) => setFilterAgent(e.target.value)}
+                  >
+                    <option value="all">All Agents</option>
+                    {uniqueAgents.map((agent) => (
+                      <option key={agent} value={agent}>
+                        Agent: {agent}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="stream-select"
+                    value={filterTask}
+                    onChange={(e) => setFilterTask(e.target.value)}
+                  >
+                    <option value="all">All Tasks</option>
+                    {uniqueTasks.map((taskId) => (
+                      <option key={taskId} value={taskId}>
+                        Task: {taskId}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    className="stream-select"
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as "desc" | "asc")}
+                  >
+                    <option value="desc">Newest First</option>
+                    <option value="asc">Oldest First</option>
+                  </select>
+                </div>
+
+                <div className="events-stream">
+                  {filteredEvents.length === 0 ? (
+                    <div className="empty-events">No events match current filter.</div>
+                  ) : (
+                    filteredEvents.map((ev) => {
+                      const detailSummary =
+                        ev.error ??
+                        ev.payload?.body?.kind ??
+                        ev.payload?.kind ??
+                        (ev.payload?.ok ? "Operation Succeeded" : "Event Dispatched");
+
+                      return (
+                        <div key={ev.seq} className={`event-item event-${ev.type}`}>
+                          <div className="event-meta">
+                            <span>
+                              #{ev.seq} · {ev.agent}
+                            </span>
+                            <span className="event-task-tag">{ev.task_id || "no-task"}</span>
+                          </div>
+                          <strong className="event-type">{ev.type}</strong>
+                          <p className="event-detail">
+                            {detailSummary}
+                            {ev.payload?.body?.paths && ` (${ev.payload.body.paths.join(", ")})`}
+                            {ev.payload?.code && ` [${ev.payload.code}]`}
+                          </p>
+                          <span
+                            className="event-time"
+                            style={{ fontSize: "9px", color: "var(--muted)" }}
+                          >
+                            {formatTime(ev.at)}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        ) : (
+          /* ==================== PLAYGROUND / WORKSPACE VIEW ==================== */
+          selected ? (
+            <>
+              <header className="agent-header">
+                <div>
+                  <div className="header-title-row">
+                    <h1>{selected.name}</h1>
+                    <StatusPill status={selected.status} />
+                  </div>
+                  <p>{selected.description || "A Codex coding Agent in an isolated workspace."}</p>
+                </div>
+                <div className="header-actions">
+                  <button
+                    className="button button-ghost"
+                    onClick={() => setShowSettings((value) => !value)}
+                    disabled={busy || selected.status === "busy"}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    className="button button-ghost"
+                    onClick={toggleAgent}
+                    disabled={busy}
+                  >
+                    {selected.status === "stopped" ? "Start" : "Stop"}
+                  </button>
+                  <button
+                    className="button button-danger"
+                    onClick={deleteAgent}
+                    disabled={busy || selected.status === "busy"}
+                  >
+                    Delete
                   </button>
                 </div>
-              </form>
-            )}
+              </header>
 
-            <section className="playground">
-              <div className="playground-topbar">
-                <div>
-                  <span className="eyebrow">Playground</span>
-                  <h2>Build something with your Agent</h2>
-                </div>
-                <div className="session-info">
-                  <span className="pulse" />
-                  {selected.codexThreadId ? "Session connected" : "New session"}
-                </div>
-              </div>
-
-              <div className="messages">
-                {messages.length === 0 && !activeRun ? (
-                  <div className="welcome">
-                    <div className="welcome-orbit">
-                      <div>⌁</div>
+              {showSettings && (
+                <form className="settings-panel" onSubmit={saveAgent}>
+                  <div className="settings-title">
+                    <div>
+                      <span className="eyebrow">Agent configuration</span>
+                      <h2>Instructions and identity</h2>
                     </div>
-                    <h3>What should {selected.name} build?</h3>
-                    <p>
-                      The Agent can inspect files, write code, run commands, and continue the
-                      same Codex session across messages.
-                    </p>
-                    <div className="prompt-grid">
-                      {starterPrompts.map((item) => (
-                        <button key={item} onClick={() => setPrompt(item)}>
-                          <span>↗</span>
-                          {item}
-                        </button>
-                      ))}
-                    </div>
+                    <button type="button" onClick={() => setShowSettings(false)}>×</button>
                   </div>
-                ) : (
-                  messages.map((message) => (
-                    <article className={"message message-" + message.role} key={message.id}>
-                      <div className="message-meta">
-                        <strong>{message.role === "user" ? "You" : selected.name}</strong>
-                        <span>{formatTime(message.createdAt)}</span>
-                      </div>
-                      <div className="message-body">{message.content}</div>
-                    </article>
-                  ))
-                )}
-                {activeRun && ["queued", "running"].includes(activeRun.status) && (
-                  <article className="message message-assistant thinking">
-                    <div className="message-meta">
-                      <strong>{selected.name}</strong>
-                      <span>working in the Agent workspace</span>
-                    </div>
-                    <div className="thinking-row">
-                      <Spinner />
-                      Codex is reading, editing, or running commands…
-                    </div>
-                  </article>
-                )}
-                {activeRun?.status === "failed" && (
-                  <article className="run-error">
-                    <strong>Run failed</strong>
-                    <span>{activeRun.error}</span>
-                  </article>
-                )}
-                <div ref={messageEnd} />
-              </div>
+                  <div className="form-grid">
+                    <label>
+                      Name
+                      <input
+                        value={form.name}
+                        onChange={(event) => setForm({ ...form, name: event.target.value })}
+                        required
+                        maxLength={80}
+                      />
+                    </label>
+                    <label>
+                      Description
+                      <input
+                        value={form.description}
+                        onChange={(event) =>
+                          setForm({ ...form, description: event.target.value })
+                        }
+                        maxLength={500}
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    System instructions
+                    <textarea
+                      value={form.instructions}
+                      onChange={(event) =>
+                        setForm({ ...form, instructions: event.target.value })
+                      }
+                      rows={5}
+                      maxLength={10_000}
+                    />
+                  </label>
+                  <div className="panel-footer">
+                    <code>{selected.workspacePath}</code>
+                    <button className="button button-primary" disabled={busy}>
+                      {busy ? <Spinner /> : "Save changes"}
+                    </button>
+                  </div>
+                </form>
+              )}
 
-              <form className="composer" onSubmit={sendMessage}>
-                <textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      event.currentTarget.form?.requestSubmit();
+              <section className="playground">
+                <div className="playground-topbar">
+                  <div>
+                    <span className="eyebrow">Playground</span>
+                    <h2>Direct Agent Workspace</h2>
+                  </div>
+                  <div className="session-info">
+                    <span className="pulse" />
+                    {selected.codexThreadId ? "Session connected" : "New session"}
+                  </div>
+                </div>
+
+                <div className="messages">
+                  {messages.length === 0 && !activeRun ? (
+                    <div className="welcome">
+                      <div className="welcome-orbit">
+                        <div>⌁</div>
+                      </div>
+                      <h3>What should {selected.name} build?</h3>
+                      <p>
+                        The Agent can inspect files, write code, run commands, and continue the
+                        same Codex session across messages.
+                      </p>
+                      <div className="prompt-grid">
+                        {starterPrompts.map((item) => (
+                          <button key={item} onClick={() => setPrompt(item)}>
+                            <span>↗</span>
+                            {item}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    messages.map((message) => (
+                      <article className={"message message-" + message.role} key={message.id}>
+                        <div className="message-meta">
+                          <strong>{message.role === "user" ? "You" : selected.name}</strong>
+                          <span>{formatTime(message.createdAt)}</span>
+                        </div>
+                        <div className="message-body">{message.content}</div>
+                      </article>
+                    ))
+                  )}
+                  {activeRun && ["queued", "running"].includes(activeRun.status) && (
+                    <article className="message message-assistant thinking">
+                      <div className="message-meta">
+                        <strong>{selected.name}</strong>
+                        <span>working in the Agent workspace</span>
+                      </div>
+                      <div className="thinking-row">
+                        <Spinner />
+                        Codex is executing tasks and reconciling files…
+                      </div>
+                    </article>
+                  )}
+                  {activeRun?.status === "failed" && (
+                    <article className="run-error">
+                      <strong>Run failed</strong>
+                      <span>{activeRun.error}</span>
+                    </article>
+                  )}
+                  <div ref={messageEnd} />
+                </div>
+
+                <form className="composer" onSubmit={sendMessage}>
+                  <textarea
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        event.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder={
+                      selected.status === "stopped"
+                        ? "Start this Agent to continue…"
+                        : "Describe what you want the Agent to do…"
                     }
-                  }}
-                  placeholder={
-                    selected.status === "stopped"
-                      ? "Start this Agent to continue…"
-                      : "Describe what you want the Agent to do…"
-                  }
-                  disabled={
-                    selected.status === "stopped" ||
-                    selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
-                  }
-                  rows={3}
-                />
-                <div className="composer-footer">
-                  <span>
-                    Enter to send · Shift + Enter for newline · {system?.codexSandboxMode ?? "checking sandbox"}
-                  </span>
-                  <button
-                    className="send-button"
                     disabled={
-                      !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
                       (activeRun != null && ["queued", "running"].includes(activeRun.status))
                     }
-                    aria-label="Send message"
-                  >
-                    ↑
-                  </button>
-                </div>
-              </form>
-            </section>
-          </>
-        ) : (
-          <div className="no-agent">
-            <div className="no-agent-art">A</div>
-            <span className="eyebrow">Agent Launchpad</span>
-            <h1>Your runtime is ready for an Agent.</h1>
-            <p>Create a workspace, give Codex a job, and continue the conversation here.</p>
-            <button
-              className="button button-primary"
-              onClick={() => {
-                setForm(emptyForm);
-                setShowCreate(true);
-              }}
-            >
-              Create your first Agent
-            </button>
-          </div>
+                    rows={3}
+                  />
+                  <div className="composer-footer">
+                    <span>
+                      Enter to send · Shift + Enter for newline · {system?.codexSandboxMode ?? "sandbox active"}
+                    </span>
+                    <button
+                      className="send-button"
+                      disabled={
+                        !prompt.trim() ||
+                        selected.status === "stopped" ||
+                        selected.status === "busy" ||
+                        (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      }
+                      aria-label="Send message"
+                    >
+                      ↑
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </>
+          ) : (
+            <div className="no-agent">
+              <div className="no-agent-art">C</div>
+              <span className="eyebrow">Agent Launchpad</span>
+              <h1>No Agent Selected.</h1>
+              <p>Select an Agent from the sidebar or return to the Task Orchestrator.</p>
+              <button
+                className="button button-primary"
+                onClick={() => {
+                  setForm(emptyForm);
+                  setShowCreate(true);
+                }}
+              >
+                Create your first Agent
+              </button>
+            </div>
+          )
         )}
       </main>
 
+      {/* Modal for creating Agent */}
       {showCreate && (
         <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}>
           <form
@@ -611,45 +900,61 @@ export default function App() {
           >
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">New workspace</span>
+                <span className="eyebrow">NEW WORKSPACE</span>
                 <h2>Create an Agent</h2>
                 <p>Each Agent gets a persistent folder and a resumable Codex session.</p>
               </div>
-              <button type="button" onClick={() => setShowCreate(false)}>×</button>
+              <button 
+                type="button" 
+                className="modal-close-btn" 
+                onClick={() => setShowCreate(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
             </div>
-            <label>
-              Name
-              <input
-                autoFocus
-                placeholder="Frontend Builder"
-                value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                required
-                maxLength={80}
-              />
-            </label>
-            <label>
-              Description
-              <input
-                placeholder="Builds polished React prototypes"
-                value={form.description}
-                onChange={(event) =>
-                  setForm({ ...form, description: event.target.value })
-                }
-                maxLength={500}
-              />
-            </label>
-            <label>
-              Instructions
-              <textarea
-                value={form.instructions}
-                onChange={(event) =>
-                  setForm({ ...form, instructions: event.target.value })
-                }
-                rows={6}
-                maxLength={10_000}
-              />
-            </label>
+
+            <div className="modal-form-body">
+              <div className="form-group">
+                <label htmlFor="agent-name">Name</label>
+                <input
+                  id="agent-name"
+                  autoFocus
+                  placeholder="Frontend Builder"
+                  value={form.name}
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  required
+                  maxLength={80}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="agent-desc">Description</label>
+                <input
+                  id="agent-desc"
+                  placeholder="Builds polished React prototypes"
+                  value={form.description}
+                  onChange={(event) =>
+                    setForm({ ...form, description: event.target.value })
+                  }
+                  maxLength={500}
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="agent-inst">Instructions</label>
+                <textarea
+                  id="agent-inst"
+                  value={form.instructions}
+                  onChange={(event) =>
+                    setForm({ ...form, instructions: event.target.value })
+                  }
+                  rows={5}
+                  maxLength={10_000}
+                />
+              </div>
+            </div>
+
             <div className="modal-footer">
               <button
                 type="button"

@@ -178,4 +178,15 @@ describe("Coordinator (push model, real FileStore)", () => {
     expect(created).toEqual([{ id: "child" }]);
     expect(taskStore.get("child")!.state).toBe("blocked");
   });
+
+  it("adopts a self-owned root task without pushing a duplicate run", async () => {
+    const created = await coordinator.onCreateTasks("a1", {
+      kind: "create_tasks",
+      tasks: [newTask({ id: "root", owner: "a1" })],
+    });
+
+    expect(created).toEqual([{ id: "root" }]);
+    expect(taskStore.get("root")!.state).toBe("assigned");
+    expect(pushAdapter.sent).toEqual([]);
+  });
 });

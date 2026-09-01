@@ -45,7 +45,7 @@ describe("Container Codex runner", () => {
     expect(args).toContain("/workspace");
     expect(args).toContain("io.codejam.instance-id=test-instance");
     expect(args).toContain("keep-id");
-    expect(args).toContain("COORDINATION_BASE_URL");
+    expect(args).toContain("COORDINATION_BASE_URL=http://host.docker.internal:3000");
     expect(args).toContain("COORDINATION_AUTH_TOKEN");
     expect(args).toContain("COORDINATION_TASK_ID");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");

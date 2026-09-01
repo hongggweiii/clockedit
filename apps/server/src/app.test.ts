@@ -69,4 +69,16 @@ describe("HTTP boundary", () => {
     await app.close();
   });
 
+  it("serves persisted tasks using the frontend task shape", async () => {
+    const router = new Router({
+      listTasks: async () => [{ id: "task-1", detail: "Build the endpoint", state: "assigned", owner: "agent-1", depends_on: [], writes: [], strikes: 1 }],
+      onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn(),
+    });
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), service, router);
+    const response = await app.inject({ method: "GET", url: "/api/tasks" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ tasks: [{ id: "task-1", detail: "Build the endpoint", state: "assigned", owner: "agent-1", depends_on: [], writes: [], strikes: 1 }] });
+    await app.close();
+  });
+
 });

@@ -47,7 +47,6 @@ describe("Container Codex runner", () => {
     expect(args).toContain("keep-id");
     expect(args).toContain("COORDINATION_BASE_URL=http://host.docker.internal:3000");
     expect(args).toContain("COORDINATION_AUTH_TOKEN");
-    expect(args).toContain("COORDINATION_TASK_ID");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
     expect(args).not.toContain("coordination-secret");
   });

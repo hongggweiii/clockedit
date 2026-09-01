@@ -123,7 +123,7 @@ describe("agentctl", () => {
     expect(JSON.parse(await readFile(
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
-    ))).toEqual({ versions: {}, edited: [], doneTaskId: null });
+    ))).toEqual({ versions: {}, edited: [], doneTaskId: null, activeTaskId: null });
   });
 
   it("discovers paths without fetching contents or creating local state", async () => {
@@ -208,7 +208,7 @@ describe("agentctl", () => {
     expect(JSON.parse(await readFile(
       path.join(workspace, ".coordination", "state.json"),
       "utf8",
-    ))).toEqual({ versions: {}, edited: [], doneTaskId: "frontend-button" });
+    ))).toEqual({ versions: {}, edited: [], doneTaskId: "frontend-button", activeTaskId: null });
   });
 
   it("rejects removed pull-model commands without sending messages", async () => {

@@ -13,6 +13,7 @@ export interface Agent {
   workspacePath: string;
   codexThreadId: string | null;
   lastError: string | null;
+  role: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,18 +58,24 @@ export interface Database {
   reads: Record<string, Record<string, number>>;
   events: StoredEvent[];
   eventSeq: number;
+  // Task-server persistence. Stored as `unknown[]` here to avoid a circular
+  // type import with router schemas; the task-server casts through its own
+  // InternalTask (see apps/server/src/task-server/task.types.ts).
+  tasks: unknown[];
 }
 
 export interface CreateAgentInput {
   name: string;
   description?: string | undefined;
   instructions?: string | undefined;
+  role?: string | undefined;
 }
 
 export interface UpdateAgentInput {
   name?: string | undefined;
   description?: string | undefined;
   instructions?: string | undefined;
+  role?: string | null | undefined;
 }
 
 export interface RunnerResult {

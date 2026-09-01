@@ -10,10 +10,14 @@ const envelope = (body: unknown, task_id: string | null = null) => ({
 
 describe("Router", () => {
   it("requires registration and routes validated fetches", async () => {
-    const coordinator = { onFetch: vi.fn().mockResolvedValue([
-      { path: "a.ts", version: 1, content: "x" },
-      { path: "b.ts", version: 2, content: "y" },
-    ]), commit: vi.fn(), done: vi.fn() };
+    const coordinator = {
+      onFetch: vi.fn().mockResolvedValue([
+        { path: "a.ts", version: 1, content: "x" },
+        { path: "b.ts", version: 2, content: "y" },
+      ]),
+      onCommit: vi.fn(),
+      onDone: vi.fn(),
+    };
     const router = new Router(coordinator);
     await expect(router.handleMessage(envelope({ kind: "fetch", paths: ["a.ts"] }))).rejects.toThrow("not registered");
     router.registerAgent("agent-1", { send: vi.fn() });

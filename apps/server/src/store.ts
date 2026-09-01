@@ -50,6 +50,7 @@ const emptyDatabase = (): Database => ({
   reads: {},
   events: [],
   eventSeq: 0,
+  tasks: [],
 });
 
 const withDefaults = (parsed: Database): Database => ({
@@ -59,6 +60,7 @@ const withDefaults = (parsed: Database): Database => ({
   reads: parsed.reads ?? {},
   events: parsed.events ?? [],
   eventSeq: parsed.eventSeq ?? 0,
+  tasks: parsed.tasks ?? [],
 });
 
 export class JsonStore {

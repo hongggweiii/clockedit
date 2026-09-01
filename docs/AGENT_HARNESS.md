@@ -12,9 +12,11 @@ user -> Playground -> Agent Runtime -> agentctl -> router -> task/file server
 ## Runtime context
 
 A coordinated `RunnerRequest` supplies the Launchpad server URL, project and
-task identifiers, and an optional authentication token. The runners expose
-that context to `agentctl` through environment variables. Secret values are
-not placed in container command arguments.
+task identifiers, and an optional authentication token. For a root
+coordination-enabled Playground run, the task identifier starts unset; the
+Agent creates one self-owned root task before editing and `agentctl` adopts its
+ID locally. The runners expose that context to `agentctl` through environment
+variables. Secret values are not placed in container command arguments.
 
 Before every coordinated turn, the runner installs the client at
 `.coordination/agentctl.mjs`, generates `.coordination/request-schema.json`
@@ -42,17 +44,19 @@ a shared file and then uses `fetch` for every file it reads or edits.
 Agent's responsibility description when one has been provided. The Agent can
 use those profiles to choose owners when creating subtasks.
 
-After creating, editing, or deleting a file, the Agent calls `mark-edited`.
-`commit` accepts no path arguments: it submits every tracked edited path and
-includes the versions of fetched, read-only files as read evidence. This keeps
-a fetched dependency out of the write set unless the Agent actually changed
-it. A successful commit clears the local tracking state.
+On an assigned task, after creating, editing, or deleting a file, the Agent
+calls `mark-edited`. `commit` accepts no path arguments: it submits every
+tracked edited path and includes the versions of fetched, read-only files as
+read evidence. This keeps a fetched dependency out of the write set unless the
+Agent actually changed it. A successful commit clears the local tracking state.
 
 If a commit returns `STALE`, the Agent lists and fetches the moved files,
-reapplies its changes, marks the edited paths, and retries. The Agent always
-calls `done` when its task finishes, including when it had no files to commit.
-The local and container runners check the successful `done` marker before they
-accept a coordinated task run as complete.
+reapplies its changes, marks the edited paths, and retries. Only an assigned
+task run calls `done` when it finishes, including when it had no files to
+commit. The local and container runners check the successful `done` marker
+before they accept an assigned task run as complete. Coordination-enabled
+playground runs must create and adopt a self-owned root task before using
+task-scoped commands such as `commit` or `done`.
 
 When the task context includes available Agent profiles, the Agent may create
 subtasks for better-suited Agents. It writes a JSON array whose objects contain

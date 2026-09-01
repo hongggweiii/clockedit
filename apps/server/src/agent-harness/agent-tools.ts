@@ -10,15 +10,24 @@ const toolFileName = "agentctl.mjs";
 const requestSchemaFileName = "request-schema.json";
 const toolSource = fileURLToPath(new URL("./agentctl.mjs", import.meta.url));
 
-export const coordinationWorkflowInstructions = [
+const coordinationWorkflowInstructionsBase = [
   "- Use `node .coordination/agentctl.mjs list-files` whenever you need to discover shared files to read or edit.",
   "- Use `node .coordination/agentctl.mjs list-agents` to discover registered Agents and their responsibilities before creating subtasks.",
   "- Use `node .coordination/agentctl.mjs fetch <path> [path ...]` before reading or editing shared files.",
+  "- Before editing shared files in a run without an assigned task, create exactly one root task with `owner` set to your Agent id and no dependencies; `agentctl create-tasks` adopts that task for this run.",
+  "- If available Agent profiles are provided and another Agent is better suited to a subtask, create a JSON array of tasks with `id`, `detail`, `owner`, `depends_on`, and `writes`, using an available Agent id as `owner`; save that array to the workspace path represented by `<json-file>`, then run `node .coordination/agentctl.mjs create-tasks <json-file>`.",
+];
+
+const taskCoordinationWorkflowInstructions = [
   "- After creating, editing, or deleting a file, immediately run `node .coordination/agentctl.mjs mark-edited <path>...` so every changed path is tracked.",
   "- Before finishing, run `node .coordination/agentctl.mjs commit`; it submits every tracked edited file together.",
   "- If commit reports `STALE`, list and fetch the moved files, reapply the required changes, mark the edited paths, and retry commit.",
-  "- If available Agent profiles are provided and another Agent is better suited to a subtask, create a JSON array of tasks with `id`, `detail`, `owner`, `depends_on`, and `writes`, using an available Agent id as `owner`; save that array to the workspace path represented by `<json-file>`, then run `node .coordination/agentctl.mjs create-tasks <json-file>`.",
-  "- Always run `node .coordination/agentctl.mjs done` when the task is finished, even when there were no files to commit.",
+  "- Always run `node .coordination/agentctl.mjs done` when the assigned task is finished, even when there were no files to commit.",
+];
+
+export const coordinationWorkflowInstructions = [
+  ...coordinationWorkflowInstructionsBase,
+  ...taskCoordinationWorkflowInstructions,
 ];
 
 export async function installAgentTools(workspacePath: string): Promise<string> {
@@ -37,7 +46,7 @@ export async function installAgentTools(workspacePath: string): Promise<string> 
 }
 
 export async function assertCoordinationDone(request: RunnerRequest): Promise<void> {
-  if (!request.coordination?.taskId) return;
+  let expectedTaskId = request.coordination?.taskId ?? null;
   const markerPath = path.join(
     request.workspacePath,
     toolDirectoryName,
@@ -46,11 +55,14 @@ export async function assertCoordinationDone(request: RunnerRequest): Promise<vo
   try {
     const state = JSON.parse(await readFile(markerPath, "utf8")) as {
       doneTaskId?: unknown;
+      activeTaskId?: unknown;
     };
-    if (state.doneTaskId === request.coordination.taskId) return;
+    expectedTaskId ??= typeof state.activeTaskId === "string" ? state.activeTaskId : null;
+    if (!expectedTaskId || state.doneTaskId === expectedTaskId) return;
   } catch {
     // The error below gives the Agent-facing action for missing and invalid state.
   }
+  if (!expectedTaskId) return;
   throw new Error(
     "Coordinated task finished without `node .coordination/agentctl.mjs done` succeeding",
   );
@@ -74,18 +86,26 @@ export function coordinationEnvironment(
 }
 
 export function coordinationContainerEnvArgs(request: RunnerRequest): string[] {
-  return Object.keys(coordinationEnvironment(request)).flatMap((name) => [
-    "--env",
-    name,
-  ]);
+  const environment = coordinationEnvironment(request);
+  return Object.entries(environment).flatMap(([name, value]) => {
+    // Keep the token out of argv. The runner passes it through the Docker
+    // process environment, while the non-secret values are made explicit so
+    // they do not depend on the parent shell exporting application config.
+    return name === "COORDINATION_AUTH_TOKEN"
+      ? ["--env", name]
+      : ["--env", `${name}=${value}`];
+  });
 }
 
 export function promptWithCoordinationTools(request: RunnerRequest): string {
   if (!request.coordination) return request.prompt;
+  const workflowInstructions = request.coordination.taskId
+    ? coordinationWorkflowInstructions
+    : coordinationWorkflowInstructionsBase;
   return [
     request.prompt,
     "",
     "Coordination requirements:",
-    ...coordinationWorkflowInstructions,
+    ...workflowInstructions,
   ].join("\n");
 }

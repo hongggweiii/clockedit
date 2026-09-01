@@ -48,7 +48,11 @@ describe("HTTP boundary", () => {
   });
 
   it("serves router activity with an incremental cursor", async () => {
-    const router = new Router({ onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]) });
+    const router = new Router({
+      onFetch: vi.fn().mockResolvedValue([{ path: "a.ts", version: 1, content: "x" }]),
+      onCommit: vi.fn(),
+      onDone: vi.fn(),
+    });
     router.registerAgent("agent-1", { send: vi.fn() });
     await router.handleMessage({
       msg_id: "5ad35cb4-3863-4c69-94b8-c829fbaa78d3",
@@ -62,6 +66,18 @@ describe("HTTP boundary", () => {
     expect(all.json().events).toHaveLength(2);
     const afterRequest = await app.inject({ method: "GET", url: "/api/events?after=1" });
     expect(afterRequest.json().events).toHaveLength(1);
+    await app.close();
+  });
+
+  it("serves persisted tasks using the frontend task shape", async () => {
+    const router = new Router({
+      listTasks: async () => [{ id: "task-1", detail: "Build the endpoint", state: "assigned", owner: "agent-1", depends_on: [], writes: [], strikes: 1 }],
+      onFetch: vi.fn(), onCommit: vi.fn(), onDone: vi.fn(),
+    });
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), service, router);
+    const response = await app.inject({ method: "GET", url: "/api/tasks" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ tasks: [{ id: "task-1", detail: "Build the endpoint", state: "assigned", owner: "agent-1", depends_on: [], writes: [], strikes: 1 }] });
     await app.close();
   });
 

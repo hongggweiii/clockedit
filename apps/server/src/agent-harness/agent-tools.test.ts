@@ -62,6 +62,10 @@ describe("Agent coordination tools", () => {
     });
     const args = coordinationContainerEnvArgs(request);
     expect(args).toContain("COORDINATION_AUTH_TOKEN");
+    expect(args).toContain("COORDINATION_BASE_URL=http://coordination.test:3000");
+    expect(args).toContain("COORDINATION_PROJECT_ID=cancel-order");
+    expect(args).toContain("COORDINATION_AGENT_ID=frontend");
+    expect(args).toContain("COORDINATION_TASK_ID=frontend-button");
     expect(args).not.toContain("test-token");
   });
 
@@ -86,6 +90,20 @@ describe("Agent coordination tools", () => {
     expect(promptWithCoordinationTools(plain)).toBe(request.prompt);
   });
 
+  it("does not instruct non-task runs to use task-scoped commands", () => {
+    const coordination = coordinatedRequest().coordination!;
+    const request = {
+      ...coordinatedRequest(),
+      coordination: { ...coordination, taskId: null },
+    };
+    const prompt = promptWithCoordinationTools(request);
+
+    expect(prompt).toContain("node .coordination/agentctl.mjs list-files");
+    expect(prompt).toContain("create-tasks <json-file>");
+    expect(prompt).not.toContain("node .coordination/agentctl.mjs commit");
+    expect(prompt).not.toContain("node .coordination/agentctl.mjs done");
+  });
+
   it("requires a successful done marker before a coordinated task completes", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "agent-tools-done-"));
     temporaryDirectories.push(workspace);
@@ -103,5 +121,20 @@ describe("Agent coordination tools", () => {
       ...request,
       coordination: { ...request.coordination, taskId: "task-2" },
     })).rejects.toThrow(/without.*done/s);
+  });
+
+  it("accepts the adopted task marker when the run started without a task", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "agent-tools-adopted-"));
+    temporaryDirectories.push(workspace);
+    const request = { ...coordinatedRequest(), workspacePath: workspace, coordination: {
+      ...coordinatedRequest().coordination!, taskId: null,
+    } };
+    await mkdir(path.join(workspace, ".coordination"));
+    await writeFile(
+      path.join(workspace, ".coordination", "state.json"),
+      JSON.stringify({ versions: {}, edited: [], doneTaskId: "root-task", activeTaskId: "root-task" }),
+      "utf8",
+    );
+    await expect(assertCoordinationDone(request)).resolves.toBeUndefined();
   });
 });

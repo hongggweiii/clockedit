@@ -15,6 +15,7 @@ const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
   instructions: z.string().max(10_000).optional(),
+  role: z.string().trim().min(1).max(40).optional(),
 });
 const updateAgentBody = createAgentBody.partial().refine(
   (value) => Object.keys(value).length > 0,
@@ -79,6 +80,10 @@ export async function createApp(
     return { events: router?.getEvents(query.after) ?? [] };
   });
 
+  app.get("/api/tasks", async () => ({
+    tasks: router ? await router.getTasks() : [],
+  }));
+
   app.get("/api/agents", async () => ({ agents: service.listAgents() }));
 
   app.post("/api/agents", async (request, reply) => {
@@ -135,7 +140,7 @@ export async function createApp(
     return { run: service.getRun(id) };
   });
 
-  if (config.nodeEnv === "production") {
+   if (config.nodeEnv === "production") {
     const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
     await app.register(fastifyStatic, {
       root: webRoot,
